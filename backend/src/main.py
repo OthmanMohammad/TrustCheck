@@ -1,5 +1,5 @@
 """
-TrustCheck Production FastAPI Application
+TrustCheck FastAPI Application
 
 Production-grade API with:
 - PostgreSQL integration
