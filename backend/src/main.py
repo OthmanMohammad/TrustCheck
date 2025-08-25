@@ -30,7 +30,8 @@ from src.database.connection import get_db, create_tables, check_db_health, get_
 from src.database.models import SanctionedEntity, ScrapingLog
 
 # Business logic imports
-from src.scrapers.ofac_scraper import OFACScraper
+from src.scrapers import scraper_registry
+from src.scrapers.registry import Region, ScraperTier
 
 # Configure logging
 logging.basicConfig(
@@ -212,97 +213,142 @@ async def read_root() -> Dict[str, Any]:
         ]
     }
 
+@app.get("/scrapers")
+async def list_scrapers():
+    """List all available scrapers with metadata."""
+    all_scrapers = scraper_registry.get_all_scrapers()
+    available_scrapers = scraper_registry.list_available_scrapers()
+    
+    # Convert enum values to strings for JSON serialization
+    scrapers_data = {}
+    for name, metadata in all_scrapers.items():
+        scrapers_data[name] = {
+            "name": metadata.name,
+            "region": metadata.region.value,
+            "tier": metadata.tier.value,
+            "update_frequency": metadata.update_frequency,
+            "entity_count": metadata.entity_count,
+            "complexity": metadata.complexity,
+            "data_format": metadata.data_format,
+            "requires_auth": metadata.requires_auth
+        }
+    
+    return {
+        "scrapers": scrapers_data,
+        "available_scrapers": available_scrapers,
+        "total_count": len(available_scrapers),
+        "by_region": {
+            "us": scraper_registry.list_by_region(Region.US),
+            "europe": scraper_registry.list_by_region(Region.EUROPE),
+            "international": scraper_registry.list_by_region(Region.INTERNATIONAL)
+        },
+        "by_tier": {
+            "tier1": scraper_registry.list_by_tier(ScraperTier.TIER1),
+            "tier2": scraper_registry.list_by_tier(ScraperTier.TIER2),
+            "tier3": scraper_registry.list_by_tier(ScraperTier.TIER3)
+        }
+    }
+
+@app.post("/scrape/{scraper_name}")
+async def scrape_by_name(
+    scraper_name: str,
+    db: Session = Depends(get_db)
+):
+    """Generic endpoint to run any registered scraper."""
+    
+    # Get scraper from registry
+    scraper = scraper_registry.create_scraper(scraper_name)
+    if not scraper:
+        available = scraper_registry.list_available_scrapers()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown scraper: {scraper_name}. Available: {available}"
+        )
+    
+    try:
+        logger.info(f"Starting scraping for {scraper_name}...")
+        
+        # Run scraper
+        result = scraper.scrape_and_store()
+        
+        if result.status == "SUCCESS":
+            return {
+                "status": "success",
+                "message": f"Successfully scraped {scraper_name}",
+                "details": {
+                    "source": result.source,
+                    "entities_processed": result.entities_processed,
+                    "duration_seconds": result.duration_seconds,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scraping failed: {result.error_message}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Scraping {scraper_name} failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Scraping failed: {str(e)}"
+        )
+
 # Core business endpoints
 @app.post("/scrape-ofac")
 async def scrape_ofac_data(db: Session = Depends(get_db)):
     """
-    Download and process real OFAC SDN list.
+    Download and process real OFAC SDN list using the registry.
     
     This endpoint:
+    - Uses the scraper registry to get OFAC scraper
     - Downloads the latest OFAC XML file (~30-60 seconds)
     - Parses 8,000+ sanctioned entities
-    - Stores in PostgreSQL database
+    - Uses the base scraper framework
     - Logs all activity for audit trail
     """
     start_time = time.time()
     
-    # Log scraping start
-    scraping_log = ScrapingLog(
-        source="OFAC",
-        status="RUNNING",
-        started_at=datetime.utcnow()
-    )
-    db.add(scraping_log)
-    db.commit()
+    # Get OFAC scraper from registry
+    ofac_scraper = scraper_registry.create_scraper("us_ofac")
+    if not ofac_scraper:
+        raise HTTPException(
+            status_code=500, 
+            detail="OFAC scraper not found in registry"
+        )
     
     try:
-        logger.info("🕷️ Starting OFAC SDN list scraping...")
+        logger.info("Starting OFAC SDN list scraping via registry...")
         
-        scraper = OFACScraper()
-        entities = scraper.scrape_and_parse()
+        # Run scraper using base framework
+        result = ofac_scraper.scrape_and_store()
         
-        logger.info(f"📥 Processing {len(entities)} entities...")
-        
-        # Clear existing OFAC data
-        deleted_count = db.query(SanctionedEntity).filter(
-            SanctionedEntity.source == "OFAC"
-        ).delete()
-        
-        # Insert new entities
-        added_count = 0
-        for entity_data in entities:
-            db_entity = SanctionedEntity(
-                uid=entity_data.uid,
-                name=entity_data.name,
-                entity_type=entity_data.entity_type,
-                source=entity_data.source,
-                programs=entity_data.programs,
-                aliases=entity_data.aliases,
-                addresses=entity_data.addresses,
-                dates_of_birth=entity_data.dates_of_birth,
-                places_of_birth=entity_data.places_of_birth,
-                nationalities=entity_data.nationalities,
-                remarks=entity_data.remarks,
-                last_seen=entity_data.last_updated
-            )
-            db.add(db_entity)
-            added_count += 1
-        
-        db.commit()
-        
-        # Update scraping log
-        duration = int(time.time() - start_time)
-        scraping_log.status = "SUCCESS"
-        scraping_log.entities_processed = len(entities)
-        scraping_log.entities_added = added_count
-        scraping_log.entities_removed = deleted_count
-        scraping_log.completed_at = datetime.utcnow()
-        scraping_log.duration_seconds = duration
-        db.commit()
-        
-        logger.info(f"✅ OFAC scraping completed: {added_count} entities added in {duration}s")
-        
-        return {
-            "status": "success",
-            "message": f"Successfully scraped and stored {added_count} OFAC entities",
-            "details": {
-                "entities_processed": len(entities),
-                "entities_added": added_count,
-                "entities_removed": deleted_count,
-                "duration_seconds": duration,
-                "timestamp": datetime.utcnow().isoformat()
+        if result.status == "SUCCESS":
+            logger.info(f"OFAC scraping completed: {result.entities_processed} entities")
+            
+            return {
+                "status": "success",
+                "message": f"Successfully scraped and processed {result.entities_processed} OFAC entities",
+                "details": {
+                    "source": result.source,
+                    "entities_processed": result.entities_processed,
+                    "entities_added": result.entities_added,
+                    "entities_updated": result.entities_updated,
+                    "entities_removed": result.entities_removed,
+                    "duration_seconds": result.duration_seconds,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
             }
-        }
-        
+        else:
+            logger.error(f"OFAC scraping failed: {result.error_message}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scraping failed: {result.error_message}"
+            )
+            
     except Exception as e:
-        # Update scraping log with error
-        scraping_log.status = "FAILED"
-        scraping_log.error_message = str(e)
-        scraping_log.completed_at = datetime.utcnow()
-        scraping_log.duration_seconds = int(time.time() - start_time)
-        db.commit()
-        
-        logger.error(f"❌ OFAC scraping failed: {e}")
+        logger.error(f"OFAC scraping failed: {e}")
         raise HTTPException(
             status_code=500, 
             detail=f"Scraping failed: {str(e)}"
