@@ -1,9 +1,5 @@
 """
-OFAC SDN List Scraper
-
-1. Uses official OFAC <sdnType> field for correct entity classification
-2. Uses <lastName> as primary name (OFAC standard - even for companies)
-3. Extracts all data fields properly (aliases, addresses, dates, etc.)
+OFAC SDN List Scraper with Change Detection
 """
 
 import requests
@@ -13,9 +9,11 @@ from dataclasses import dataclass
 from datetime import datetime
 import logging
 import time
+import hashlib
 from sqlalchemy.orm import Session
 
-from src.scrapers.base.scraper import BaseScraper, ScrapingResult
+from src.scrapers.base.change_aware_scraper import ChangeAwareScraper
+from src.scrapers.base.scraper import ScrapingResult
 from src.scrapers.registry import scraper_registry, ScraperMetadata, Region, ScraperTier
 from src.database.connection import db_manager
 from src.database.models import SanctionedEntity
@@ -43,11 +41,19 @@ class SanctionedEntityData:
     first_name: Optional[str] = None
     last_name: Optional[str] = None
 
-# ======================== MAIN SCRAPER CLASS ========================
+# ======================== ENHANCED OFAC SCRAPER ========================
 
-class OFACScraper(BaseScraper):
+class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
     """
-    Production-ready OFAC SDN scraper with REAL database storage.
+    OFAC SDN scraper with AUTOMATIC change detection.
+    
+    This scraper:
+    1. Downloads OFAC SDN XML data
+    2. Automatically calculates content hash
+    3. Skips processing if content unchanged
+    4. Compares with previous data to detect changes
+    5. Stores changes with risk classification
+    6. Sends notifications for critical changes
     """
     
     SDN_URL = "https://www.treasury.gov/ofac/downloads/sdn.xml"
@@ -61,13 +67,18 @@ class OFACScraper(BaseScraper):
     }
     
     def __init__(self):
-        super().__init__("US_OFAC")
+        # Initialize with source URL for change detection
+        super().__init__("us_ofac", self.SDN_URL)
+        
+        # HTTP session for downloads
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'TrustCheck-Compliance-Platform/2.0',
             'Accept': 'application/xml, text/xml',
             'Accept-Encoding': 'gzip, deflate'
         })
+        
+        # XML parsing
         self.namespace = None
         
         # Statistics tracking
@@ -85,19 +96,64 @@ class OFACScraper(BaseScraper):
             'with_birth_dates': 0
         }
     
-    # ======================== BASE SCRAPER INTERFACE ========================
+    # ======================== LEGACY INTERFACE FOR COMPATIBILITY ========================
+    
+    def scrape_and_store_legacy(self) -> ScrapingResult:
+        """
+        Legacy method that uses the old scraping approach.
+        Keep for backward compatibility with existing API endpoints.
+        """
+        return super(ChangeAwareScraper, self).scrape_and_store()
+    
+    # ======================== CHANGE-AWARE SCRAPER INTERFACE ========================
     
     def download_data(self) -> str:
-        """Download OFAC SDN XML data."""
-        return self.download_sdn_list()
+        """
+        This method is no longer needed.
+        ChangeAwareScraper handles download via DownloadManager.
+        """
+        raise NotImplementedError(
+            "download_data() is not used in ChangeAwareScraper. "
+            "Downloads are handled automatically by DownloadManager."
+        )
     
-    def parse_entities(self, xml_content: str) -> List[SanctionedEntityData]:
-        """Parse OFAC XML into entities."""
-        return self.parse_ofac_entities(xml_content)
+    def parse_entities(self, xml_content: str) -> List[Dict[str, Any]]:
+        """
+        Parse OFAC XML into entity dictionaries.
+        
+        Returns List[Dict] instead of List[SanctionedEntityData]
+        to match ChangeAwareScraper interface.
+        """
+        # Parse XML using existing logic
+        parsed_entities = self.parse_ofac_entities_internal(xml_content)
+        
+        # Convert to dictionaries for change detection
+        entity_dicts = []
+        for entity_data in parsed_entities:
+            entity_dict = {
+                'uid': entity_data.uid,
+                'name': entity_data.name,
+                'entity_type': entity_data.entity_type,
+                'programs': entity_data.programs,
+                'aliases': entity_data.aliases,
+                'addresses': entity_data.addresses,
+                'dates_of_birth': entity_data.dates_of_birth,
+                'places_of_birth': entity_data.places_of_birth,
+                'nationalities': entity_data.nationalities,
+                'remarks': entity_data.remarks
+            }
+            entity_dicts.append(entity_dict)
+        
+        return entity_dicts
     
-    def store_entities(self, entities: List[SanctionedEntityData]) -> None:
-        """FIXED: Actually store OFAC entities in database."""
-        self.logger.info(f"Storing {len(entities)} OFAC entities in database...")
+    def store_entities(self, entity_dicts: List[Dict[str, Any]]) -> None:
+        """
+        Store entity dictionaries in database.
+        
+        Args:
+            entity_dicts: List of entity dictionaries from parse_entities()
+        """
+        self.logger.info(f"Storing {len(entity_dicts)} OFAC entities in database...")
         
         with db_manager.get_session() as db:
             try:
@@ -110,127 +166,51 @@ class OFACScraper(BaseScraper):
                 
                 # Insert new entities
                 stored_count = 0
-                for entity_data in entities:
+                for entity_dict in entity_dicts:
+                    # Generate content hash for this entity
+                    entity_content = f"{entity_dict['name']}{entity_dict['entity_type']}{entity_dict.get('programs', [])}"
+                    content_hash = hashlib.sha256(entity_content.encode('utf-8')).hexdigest()
+                    
                     db_entity = SanctionedEntity(
-                        uid=entity_data.uid,
-                        name=entity_data.name,
-                        entity_type=entity_data.entity_type,
-                        source=entity_data.source,
-                        programs=entity_data.programs,
-                        aliases=entity_data.aliases,
-                        addresses=entity_data.addresses,
-                        dates_of_birth=entity_data.dates_of_birth,
-                        places_of_birth=entity_data.places_of_birth,
-                        nationalities=entity_data.nationalities,
-                        remarks=entity_data.remarks,
-                        last_seen=entity_data.last_updated
+                        uid=entity_dict['uid'],
+                        name=entity_dict['name'],
+                        entity_type=entity_dict['entity_type'],
+                        source="OFAC",
+                        programs=entity_dict.get('programs'),
+                        aliases=entity_dict.get('aliases'),
+                        addresses=entity_dict.get('addresses'),
+                        dates_of_birth=entity_dict.get('dates_of_birth'),
+                        places_of_birth=entity_dict.get('places_of_birth'),
+                        nationalities=entity_dict.get('nationalities'),
+                        remarks=entity_dict.get('remarks'),
+                        content_hash=content_hash,  # New: Store content hash
+                        last_seen=datetime.utcnow()
                     )
                     db.add(db_entity)
                     stored_count += 1
                     
-                    # Commit in batches for better performance
+                    # Commit in batches for performance
                     if stored_count % 1000 == 0:
                         db.commit()
-                        self.logger.info(f"Stored {stored_count}/{len(entities)} entities...")
+                        self.logger.info(f"Stored {stored_count}/{len(entity_dicts)} entities...")
                 
                 # Final commit
                 db.commit()
                 
-                self.logger.info(f"✅ Successfully stored {stored_count} OFAC entities in database")
+                self.logger.info(f"Successfully stored {stored_count} OFAC entities in database")
                 
-                # Show sample entities
-                for entity in entities[:3]:
-                    self.logger.info(f"  - {entity.name} ({entity.entity_type})")
-                    
             except Exception as e:
                 db.rollback()
                 self.logger.error(f"Failed to store entities: {e}")
                 raise
     
-    # ======================== DOWNLOAD METHODS ========================
+    # ======================== INTERNAL PARSING METHODS ========================
     
-    def download_sdn_list(self) -> str:
-        """Download the OFAC SDN XML file with error handling."""
-        self.logger.info(f"Downloading OFAC SDN from: {self.SDN_URL}")
-        
-        try:
-            start_time = time.time()
-            response = self.session.get(self.SDN_URL, timeout=120, stream=True)
-            response.raise_for_status()
-            
-            # Get content
-            content = response.text
-            download_time = time.time() - start_time
-            size_mb = len(content.encode('utf-8')) / (1024 * 1024)
-            
-            self.logger.info(f"Downloaded {size_mb:.1f}MB in {download_time:.1f}s")
-            
-            # Basic validation
-            if len(content) < 10000:
-                raise ValueError("Downloaded content too small - likely an error page")
-            
-            if not content.strip().startswith('<?xml'):
-                raise ValueError("Downloaded content is not XML")
-            
-            return content
-            
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Network error downloading SDN: {e}")
-            raise
-        except Exception as e:
-            self.logger.error(f"Error downloading SDN: {e}")
-            raise
-    
-    # ======================== PARSING METHODS ========================
-    
-    def _detect_namespace(self, root) -> str:
-        """Detect and store XML namespace."""
-        if root.tag.startswith('{'):
-            namespace = root.tag.split('}')[0] + '}'
-            self.logger.info(f"Detected namespace: {namespace}")
-        else:
-            namespace = ''
-            self.logger.info("No namespace detected")
-        
-        return namespace
-    
-    def _get_text(self, element, tag_name: str, default: str = '') -> str:
-        """Safely extract text from XML element with namespace support."""
-        try:
-            if self.namespace:
-                child = element.find(f'{self.namespace}{tag_name}')
-            else:
-                child = element.find(tag_name)
-            
-            if child is not None and child.text:
-                return child.text.strip()
-        except Exception:
-            pass
-        
-        return default
-    
-    def _find_elements(self, element, tag_name: str):
-        """Find child elements with namespace support."""
-        try:
-            if self.namespace:
-                return element.findall(f'{self.namespace}{tag_name}')
-            else:
-                return element.findall(tag_name)
-        except Exception:
-            return []
-    
-    def _find_element(self, element, tag_name: str):
-        """Find single child element with namespace support."""
-        try:
-            if self.namespace:
-                return element.find(f'{self.namespace}{tag_name}')
-            else:
-                return element.find(tag_name)
-        except Exception:
-            return None
-    
-    def parse_ofac_entities(self, xml_content: str) -> List[SanctionedEntityData]:
-        """Parse XML content with comprehensive error handling."""
+    def parse_ofac_entities_internal(self, xml_content: str) -> List[SanctionedEntityData]:
+        """
+        Internal method that parses XML content.
+        Returns SanctionedEntityData objects for internal use.
+        """
         self.logger.info("Parsing OFAC XML content...")
         
         try:
@@ -289,6 +269,54 @@ class OFACScraper(BaseScraper):
         except Exception as e:
             self.logger.error(f"Unexpected parsing error: {e}")
             raise
+    
+    # ======================== XML PARSING HELPERS ========================
+    
+    def _detect_namespace(self, root) -> str:
+        """Detect and store XML namespace."""
+        if root.tag.startswith('{'):
+            namespace = root.tag.split('}')[0] + '}'
+            self.logger.info(f"Detected namespace: {namespace}")
+        else:
+            namespace = ''
+            self.logger.info("No namespace detected")
+        
+        return namespace
+    
+    def _get_text(self, element, tag_name: str, default: str = '') -> str:
+        """Safely extract text from XML element with namespace support."""
+        try:
+            if self.namespace:
+                child = element.find(f'{self.namespace}{tag_name}')
+            else:
+                child = element.find(tag_name)
+            
+            if child is not None and child.text:
+                return child.text.strip()
+        except Exception:
+            pass
+        
+        return default
+    
+    def _find_elements(self, element, tag_name: str):
+        """Find child elements with namespace support."""
+        try:
+            if self.namespace:
+                return element.findall(f'{self.namespace}{tag_name}')
+            else:
+                return element.findall(tag_name)
+        except Exception:
+            return []
+    
+    def _find_element(self, element, tag_name: str):
+        """Find single child element with namespace support."""
+        try:
+            if self.namespace:
+                return element.find(f'{self.namespace}{tag_name}')
+            else:
+                return element.find(tag_name)
+        except Exception:
+            return None
     
     def _parse_sdn_entry(self, entry) -> Optional[SanctionedEntityData]:
         """Parse individual SDN entry using OFFICIAL OFAC fields."""
@@ -496,7 +524,7 @@ class OFACScraper(BaseScraper):
 
 # ======================== REGISTRY REGISTRATION ========================
 
-# Register the OFAC scraper in the global registry
+# Register the enhanced OFAC scraper in the global registry
 scraper_registry.register(
     OFACScraper,
     ScraperMetadata(
