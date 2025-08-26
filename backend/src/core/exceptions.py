@@ -6,7 +6,6 @@ Features:
 - Error codes and categories
 - Context preservation
 - Logging integration
-- User-friendly error messages
 - Debugging information
 """
 
@@ -350,6 +349,17 @@ class ChangeDetectionError(BusinessLogicError):
             error_code="CHANGE_DETECTION_ERROR",
             context={**kwargs.pop('context', {}), "source": source, "stage": stage},
             user_message=f"Failed to detect changes in {source} data.",
+            **kwargs
+        )
+
+class RepositoryError(TrustCheckError):
+    """Base repository error."""
+    
+    def __init__(self, message: str, **kwargs):
+        super().__init__(
+            message=message,
+            error_code=kwargs.pop('error_code', 'REPOSITORY_ERROR'),
+            category=ErrorCategory.DATABASE,
             **kwargs
         )
 
