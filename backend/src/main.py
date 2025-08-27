@@ -28,8 +28,8 @@ from src.core.logging_config import (
 )
 
 # Database imports
-from src.database.connection import get_db, create_tables, check_db_health, get_db_stats
-from src.database.models import SanctionedEntity, ScrapingLog, ChangeEvent, ScraperRun
+from src.infrastructure.database.connection import get_db, create_tables, check_db_health, get_db_stats  
+from src.infrastructure.database.models import SanctionedEntity, ScrapingLog, ChangeEvent, ScraperRun
 
 # Business logic imports  
 from src.scrapers import scraper_registry

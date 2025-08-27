@@ -108,7 +108,7 @@ class TestDownloadManager:
         """Test content hash comparison for skipping."""
         manager = DownloadManager()
         
-        with patch('src.database.connection.db_manager') as mock_db:
+        with patch('src.infrastructure.database.connection.db_manager') as mock_db:
             mock_session = Mock()
             mock_result = Mock()
             mock_result.content_hash = "abc123"
@@ -204,7 +204,7 @@ class TestChangeAwareScraperFixed:
     
     def test_get_current_entities(self):
         """Test retrieval of current entities from database."""
-        with patch('src.database.connection.db_manager') as mock_db:
+        with patch('src.infrastructure.database.connection.db_manager') as mock_db:
             mock_session = Mock()
             mock_entity = Mock()
             mock_entity.uid = 'TEST-001'
@@ -258,7 +258,7 @@ class TestChangeDetectionAPIFixed:
         assert router is not None
         
         # Test that our models exist
-        from src.database.models import ChangeEvent, ScraperRun, ContentSnapshot
+        from src.infrastructure.database.models import ChangeEvent, ScraperRun, ContentSnapshot
         assert ChangeEvent is not None
         assert ScraperRun is not None
         assert ContentSnapshot is not None

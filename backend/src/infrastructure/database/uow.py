@@ -363,7 +363,7 @@ class SQLAlchemyUnitOfWorkFactory:
 
 # ======================== DEPENDENCY INJECTION HELPERS ========================
 
-from src.database.connection import db_manager
+from src.infrastructure.database.connection import db_manager
 
 def get_uow_factory() -> SQLAlchemyUnitOfWorkFactory:
     """Get Unit of Work factory instance."""
