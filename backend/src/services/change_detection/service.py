@@ -125,12 +125,8 @@ class ChangeDetectionService:
                 return result
                 
         except Exception as e:
-            error = handle_exception(e, self.logger, context={
-                "operation": "detect_changes_for_source",
-                "source": source.value,
-                "scraper_run_id": scraper_run_id
-            })
-            raise ChangeDetectionError(source.value, "change_detection") from e
+            self.logger.error(f"Change detection failed: {e}", exc_info=True)
+            raise ChangeDetectionError(source.value, "change_detection", cause=e) from e
             
     async def get_change_summary(
         self,
@@ -204,12 +200,8 @@ class ChangeDetectionService:
                 return summary
                 
         except Exception as e:
-            error = handle_exception(e, self.logger, context={
-                "operation": "get_change_summary",
-                "days": days,
-                "source": source.value if source else None
-            })
-            raise ChangeDetectionError("system", "summary_generation", cause=e) from error
+            self.logger.error(f"Change detection failed: {e}", exc_info=True)
+            raise ChangeDetectionError(source.value, "change_detection", cause=e) from e
     
     async def get_critical_changes(
         self,
@@ -254,12 +246,8 @@ class ChangeDetectionService:
                 return critical_changes
                 
         except Exception as e:
-            error = handle_exception(e, self.logger, context={
-                "operation": "get_critical_changes",
-                "hours": hours,
-                "source": source.value if source else None
-            })
-            raise ChangeDetectionError("system", "critical_changes_query", cause=e) from error
+            self.logger.error(f"Change detection failed: {e}", exc_info=True)
+            raise ChangeDetectionError(source.value, "change_detection", cause=e) from e
     
     # ======================== PRIVATE HELPER METHODS ========================
     

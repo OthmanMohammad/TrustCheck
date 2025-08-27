@@ -169,69 +169,58 @@ async def list_changes(
     limit: int = Query(50, description="Maximum results", ge=1, le=1000),
     change_detection_service: ChangeDetectionService = Depends(get_change_detection_service)
 ):
-    """List recent changes with filtering - FIXED async/await."""
+    """List recent changes with filtering."""
     
     try:
-        with LoggingContext(request_id=getattr(request.state, 'request_id', str(uuid.uuid4()))):
-            logger.info(
-                "Listing changes",
-                extra={
-                    "source": source.value if source else None,
-                    "change_type": change_type.value if change_type else None,
-                    "risk_level": risk_level.value if risk_level else None,
-                    "days": days
-                }
+        # Get change summary
+        summary = await change_detection_service.get_change_summary(
+            days=days,
+            source=source,
+            risk_level=risk_level
+        )
+        
+        # Get critical changes if needed
+        critical_changes = []
+        if not risk_level or risk_level == RiskLevel.CRITICAL:
+            critical_changes = await change_detection_service.get_critical_changes(
+                hours=days * 24,
+                source=source
             )
-            
-            # FIXED: Properly await async service methods
-            summary = await change_detection_service.get_change_summary(
-                days=days,
-                source=source,
-                risk_level=risk_level
-            )
-            
-            # Get critical changes if needed
-            critical_changes = []
-            if not risk_level or risk_level == RiskLevel.CRITICAL:
-                critical_changes = await change_detection_service.get_critical_changes(
-                    hours=days * 24,
-                    source=source
-                )
-            
-            # Format critical changes for response
-            critical_changes_formatted = []
-            for change in critical_changes[:10]:  # Limit to 10 for response
-                try:
-                    change_dict = {
-                        "event_id": str(change.event_id),
-                        "entity_name": change.entity_name,
-                        "entity_uid": change.entity_uid,
-                        "change_type": change.change_type.value,
-                        "risk_level": change.risk_level.value,
-                        "change_summary": change.change_summary,
-                        "detected_at": change.detected_at.isoformat() if change.detected_at else None,
-                        "requires_immediate_attention": change.requires_immediate_notification
-                    }
-                    critical_changes_formatted.append(change_dict)
-                except Exception as e:
-                    logger.warning(f"Error formatting change {change.event_id}: {e}")
-                    continue
-            
-            return {
-                "success": True,
-                "data": {
-                    "summary": summary,
-                    "critical_changes": critical_changes_formatted
-                },
-                "metadata": {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "request_id": getattr(request.state, 'request_id', None)
+        
+        # Format response
+        critical_changes_formatted = []
+        for change in critical_changes[:10]:
+            try:
+                change_dict = {
+                    "event_id": str(change.event_id),
+                    "entity_name": change.entity_name,
+                    "entity_uid": change.entity_uid,
+                    "change_type": change.change_type.value,
+                    "risk_level": change.risk_level.value,
+                    "change_summary": change.change_summary,
+                    "detected_at": change.detected_at.isoformat() if change.detected_at else None
                 }
+                critical_changes_formatted.append(change_dict)
+            except Exception as e:
+                logger.warning(f"Error formatting change: {e}")
+                continue
+        
+        return {
+            "success": True,
+            "data": {
+                "summary": summary,
+                "critical_changes": critical_changes_formatted
+            },
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
             }
-            
+        }
+        
     except Exception as e:
         logger.error(f"Error listing changes: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        # Don't use handle_exception here - just return error
+        raise HTTPException(status_code=500, detail=f"Failed to list changes: {str(e)}")
 
 @router.get("/changes/critical")
 async def get_critical_changes(
@@ -298,7 +287,151 @@ async def get_critical_changes(
     except Exception as e:
         logger.error(f"Error getting critical changes: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/entities/search")
+async def search_entities(
+    request: Request,
+    name: str = Query(..., description="Name to search for"),
+    fuzzy: bool = Query(False, description="Use fuzzy matching"),
+    limit: int = Query(20, ge=1, le=100),
+    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
+):
+    """Search entities by name."""
+    try:
+        entities = await entity_repo.search_by_name(name, fuzzy=fuzzy, limit=limit)
+        
+        # Convert to response format
+        results = []
+        for entity in entities:
+            results.append({
+                "uid": entity.uid,
+                "name": entity.name,
+                "type": entity.entity_type.value,
+                "source": entity.source.value,
+                "programs": entity.programs,
+                "match_score": 1.0  # Would be calculated in fuzzy search
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "query": name,
+                "results": results,
+                "count": len(results)
+            },
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error searching entities: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/entities/{uid}")
+async def get_entity_by_uid(
+    uid: str,
+    request: Request,
+    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
+):
+    """Get entity by UID."""
+    try:
+        entity = await entity_repo.get_by_uid(uid)
+        
+        if not entity:
+            raise HTTPException(status_code=404, detail=f"Entity {uid} not found")
+        
+        # Convert to response format
+        entity_dict = {
+            "uid": entity.uid,
+            "name": entity.name,
+            "type": entity.entity_type.value,
+            "source": entity.source.value,
+            "programs": entity.programs,
+            "aliases": entity.aliases,
+            "addresses": [str(addr) for addr in entity.addresses] if entity.addresses else [],
+            "nationalities": entity.nationalities,
+            "is_active": entity.is_active,
+            "last_updated": entity.updated_at.isoformat() if entity.updated_at else None,
+            "is_high_risk": entity.is_high_risk
+        }
+        
+        return {
+            "success": True,
+            "data": entity_dict,
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting entity {uid}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Keep other endpoints as they are, just ensure all async methods are properly awaited
+
+
+
+
+@router.get("/statistics")
+async def get_statistics(
+    request: Request,
+    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository),
+    change_detection_service: ChangeDetectionService = Depends(get_change_detection_service)
+):
+    """Get comprehensive statistics."""
+    try:
+        # Get entity statistics
+        entity_stats = await entity_repo.get_statistics()
+        
+        # Get change statistics
+        change_summary = await change_detection_service.get_change_summary(days=7)
+        
+        return {
+            "success": True,
+            "data": {
+                "entities": entity_stats,
+                "changes": change_summary
+            },
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting statistics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scraping/status")
+async def get_scraping_status(
+    request: Request,
+    hours: int = Query(24, description="Hours to look back", ge=1, le=168),
+    source: Optional[DataSource] = Query(None, description="Filter by source"),
+    scraping_service: ScrapingOrchestrationService = Depends(get_scraping_service)
+):
+    """Get scraping status."""
+    try:
+        status = await scraping_service.get_scraping_status(
+            source=source,
+            hours=hours
+        )
+        
+        return {
+            "success": True,
+            "data": status,
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting scraping status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 __all__ = ['router']

@@ -344,12 +344,16 @@ class ChangeDetectionError(BusinessLogicError):
     """Change detection specific errors."""
     
     def __init__(self, source: str, stage: str, **kwargs):
+        # Build context without duplication
+        context = kwargs.pop('context', {})
+        context.update({"source": source, "stage": stage})
+        
         super().__init__(
             rule=f"Change detection failed for {source} during {stage}",
             error_code="CHANGE_DETECTION_ERROR",
-            context={**kwargs.pop('context', {}), "source": source, "stage": stage},
+            context=context,
             user_message=f"Failed to detect changes in {source} data.",
-            **kwargs
+            **kwargs  # Pass remaining kwargs like 'cause'
         )
 
 class RepositoryError(TrustCheckError):
@@ -422,8 +426,6 @@ def handle_exception(
 ) -> TrustCheckError:
     """
     Convert any exception to a TrustCheckError with proper logging.
-    
-    FIXED: Avoid duplicate 'context' parameter
     """
     
     # If already a TrustCheckError, just log and return
@@ -446,8 +448,8 @@ def handle_exception(
         error_code=default_error_code,
         category=ErrorCategory.SYSTEM,
         severity=ErrorSeverity.HIGH,
-        context=context or {},  # Only pass context here, not as cause parameter
-        cause=exc
+        context=context or {},  # Pass context here only
+        cause=exc  # DON'T pass context as cause parameter
     )
     
     logger.error(
@@ -474,6 +476,37 @@ def create_error_response(error: TrustCheckError) -> Dict[str, Any]:
             "suggestions": error.suggestions
         }
     }
+
+def safe_handle_exception(
+    exc: Exception,
+    logger,
+    operation: str,
+    **extra_context
+) -> None:
+    """Safely handle exceptions without causing parameter conflicts."""
+    
+    if isinstance(exc, TrustCheckError):
+        # Already a TrustCheck error, just log it
+        logger.error(
+            f"{operation} failed: {exc.message}",
+            extra={
+                "error_code": exc.error_code,
+                "operation": operation,
+                **extra_context
+            },
+            exc_info=True
+        )
+    else:
+        # Generic exception
+        logger.error(
+            f"{operation} failed: {str(exc)}",
+            extra={
+                "operation": operation,
+                "exception_type": type(exc).__name__,
+                **extra_context
+            },
+            exc_info=True
+        )
 
 # Export all exception types
 __all__ = [
