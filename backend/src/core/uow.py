@@ -5,16 +5,21 @@ Manages transactions across multiple repositories to ensure data consistency.
 Provides a single interface for complex business operations that span multiple entities.
 """
 
-from typing import Protocol, Optional, Any, Dict
+from typing import Protocol, Optional, Any, Dict, TYPE_CHECKING
 from abc import abstractmethod
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from src.core.domain.repositories import (
-    SanctionedEntityRepository, ChangeEventRepository, 
-    ScraperRunRepository, ContentSnapshotRepository
-)
-from src.core.exceptions import TransactionError, DatabaseError
 from src.core.logging_config import get_logger
+
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from src.core.domain.repositories import (
+        SanctionedEntityRepository, ChangeEventRepository, 
+        ScraperRunRepository, ContentSnapshotRepository
+    )
+    from src.core.enums import DataSource
+    from src.core.domain.entities import ChangeDetectionResult
 
 logger = get_logger(__name__)
 
@@ -36,10 +41,10 @@ class UnitOfWork(Protocol):
     
     # ======================== REPOSITORY INTERFACES ========================
     
-    sanctioned_entities: SanctionedEntityRepository
-    change_events: ChangeEventRepository
-    scraper_runs: ScraperRunRepository
-    content_snapshots: ContentSnapshotRepository
+    sanctioned_entities: 'SanctionedEntityRepository'
+    change_events: 'ChangeEventRepository'
+    scraper_runs: 'ScraperRunRepository'
+    content_snapshots: 'ContentSnapshotRepository'
     
     # ======================== TRANSACTION MANAGEMENT ========================
     
@@ -129,7 +134,9 @@ class ScrapingOperationContext:
         try:
             # Mark scraper run as failed if it exists
             if self.scraper_run:
-                self.scraper_run.mark_failed("Operation rolled back due to error")
+                from src.core.enums import ScrapingStatus
+                self.scraper_run.status = ScrapingStatus.FAILED
+                self.scraper_run.error_message = "Operation rolled back due to error"
                 await self.uow.scraper_runs.update(self.scraper_run)
             
             await self.uow.rollback()
@@ -251,6 +258,7 @@ def requires_transaction(func):
     """
     async def wrapper(uow: UnitOfWork, *args, **kwargs):
         if not uow.is_active:
+            from src.core.exceptions import TransactionError
             raise TransactionError("Function requires an active transaction")
         return await func(uow, *args, **kwargs)
     return wrapper
@@ -308,20 +316,13 @@ class BusinessOperations:
                 content_snapshot = await uow.content_snapshots.create(content_snapshot)
                 results['content_snapshot'] = content_snapshot
                 
-                # Step 3: Perform change detection (if this is implemented)
-                # This would be implemented by the concrete UnitOfWork
-                if hasattr(uow, 'perform_change_detection'):
-                    change_result = await uow.perform_change_detection(
-                        source=source,
-                        new_entities=entities_data,
-                        scraper_run_id=scraper_run.run_id,
-                        old_content_hash="",  # Would be retrieved from last snapshot
-                        new_content_hash=content_snapshot.content_hash
-                    )
-                    results['change_detection_result'] = change_result
+                # Step 3: Perform change detection (placeholder)
+                # This would be implemented by concrete UnitOfWork implementations
                 
                 # Step 4: Update scraper run with results
-                scraper_run.mark_completed(scraper_run.status)
+                from src.core.enums import ScrapingStatus
+                scraper_run.status = ScrapingStatus.SUCCESS
+                scraper_run.completed_at = datetime.utcnow()
                 scraper_run = await uow.scraper_runs.update(scraper_run)
                 results['scraper_run'] = scraper_run
                 

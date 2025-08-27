@@ -3,7 +3,7 @@ SQLAlchemy Change Event Repository Implementation
 """
 
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, func
 from sqlalchemy.exc import SQLAlchemyError
