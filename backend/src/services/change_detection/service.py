@@ -130,8 +130,8 @@ class ChangeDetectionService:
                 "source": source.value,
                 "scraper_run_id": scraper_run_id
             })
-            raise ChangeDetectionError(source.value, "change_detection", cause=e) from error
-    
+            raise ChangeDetectionError(source.value, "change_detection") from e
+            
     async def get_change_summary(
         self,
         days: int = 7,

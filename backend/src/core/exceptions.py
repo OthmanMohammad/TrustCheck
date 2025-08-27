@@ -423,14 +423,7 @@ def handle_exception(
     """
     Convert any exception to a TrustCheckError with proper logging.
     
-    Args:
-        exc: The original exception
-        logger: Logger instance
-        default_error_code: Error code if not a TrustCheckError
-        context: Additional context
-        
-    Returns:
-        TrustCheckError instance
+    FIXED: Avoid duplicate 'context' parameter
     """
     
     # If already a TrustCheckError, just log and return
@@ -453,7 +446,7 @@ def handle_exception(
         error_code=default_error_code,
         category=ErrorCategory.SYSTEM,
         severity=ErrorSeverity.HIGH,
-        context=context or {},
+        context=context or {},  # Only pass context here, not as cause parameter
         cause=exc
     )
     
