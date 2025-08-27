@@ -2,7 +2,6 @@
 Updated Service Layer Using Repository Pattern
 
 Business logic services that depend on repository interfaces instead of direct database access.
-This provides better testability, separation of concerns, and flexibility.
 """
 
 from typing import List, Dict, Any, Optional
@@ -552,7 +551,12 @@ class ScrapingOrchestrationService:
                 "request_id": request.request_id,
                 "run_id": run_id
             })
-            raise ScrapingError(request.source.value, "orchestration", cause=e) from error
+            # FIXED: Don't pass user_message when converting to ScrapingError
+            raise ScrapingError(
+                source=request.source.value,
+                url="orchestration",
+                context={"run_id": run_id, "error": str(e)}
+            ) from error
     
     async def get_scraping_status(
         self,
@@ -630,7 +634,12 @@ class ScrapingOrchestrationService:
                 "source": source.value if source else None,
                 "hours": hours
             })
-            raise ScrapingError("system", "status_query", cause=e) from error
+            # FIXED: Don't pass user_message when converting to ScrapingError
+            raise ScrapingError(
+                source="system",
+                url="status_query",
+                context={"hours": hours, "error": str(e)}
+            ) from error
     
     # ======================== PRIVATE HELPER METHODS ========================
     
@@ -645,7 +654,11 @@ class ScrapingOrchestrationService:
         
         scraper = scraper_registry.create_scraper(request.source.value)
         if not scraper:
-            raise ScrapingError(request.source.value, "scraper_not_found")
+            raise ScrapingError(
+                source=request.source.value,
+                url="scraper_not_found",
+                context={"error": f"No scraper found for source: {request.source.value}"}
+            )
         
         # Execute scraping (this would be adapted to return proper format)
         result = scraper.scrape_and_store()
