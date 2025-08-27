@@ -15,8 +15,8 @@ from sqlalchemy import text
 from src.scrapers.base.scraper import BaseScraper, ScrapingResult
 from src.services.change_detection.download_manager import DownloadManager
 from src.services.change_detection.change_detector import ChangeDetector, EntityChange
-from src.database.connection import db_manager
-from src.database.models import SanctionedEntity, ContentSnapshot, ChangeEvent, ScraperRun
+from src.infrastructure.database.connection import db_manager
+from src.infrastructure.database.models import SanctionedEntity, ContentSnapshot, ChangeEvent, ScraperRun
 
 # ======================== CHANGE-AWARE SCRAPER CLASS ========================
 

@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 from src.scrapers.base.change_aware_scraper import ChangeAwareScraper
 from src.scrapers.base.scraper import ScrapingResult
 from src.scrapers.registry import scraper_registry, ScraperMetadata, Region, ScraperTier
-from src.database.connection import db_manager
-from src.database.models import SanctionedEntity
+from src.infrastructure.database.connection import db_manager
+from src.infrastructure.database.models import SanctionedEntity
 
 # ======================== DATA MODELS ========================
 

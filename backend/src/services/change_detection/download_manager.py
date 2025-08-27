@@ -130,7 +130,7 @@ class DownloadManager:
             True if content unchanged, False if should process
         """
         try:
-            from src.database.connection import db_manager
+            from src.infrastructure.database.connection import db_manager
             
             with db_manager.get_session() as db:
                 # Query for last successful content hash

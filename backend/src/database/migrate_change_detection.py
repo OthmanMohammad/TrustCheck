@@ -7,8 +7,8 @@ Run this script to upgrade your database schema.
 
 import logging
 from sqlalchemy import text, inspect
-from src.database.connection import db_manager
-from src.database.models import Base, ContentSnapshot, ChangeEvent, ScraperRun
+from src.infrastructure.database.connection import db_manager
+from src.infrastructure.database.models import Base, ContentSnapshot, ChangeEvent, ScraperRun
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

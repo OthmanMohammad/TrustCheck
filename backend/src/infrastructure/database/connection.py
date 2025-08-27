@@ -23,23 +23,23 @@ class DatabaseManager:
     def _initialize_engine(self):
         """Initialize PostgreSQL engine."""
         
-        logger.info(f"🔌 Connecting to PostgreSQL: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
+        logger.info(f"🔌 Connecting to PostgreSQL: {settings.database.host}:{settings.database.port}/{settings.database.name}")
         
         # Production engine configuration
         self.engine = create_engine(
-            settings.database_url,
+            settings.database.database_url,  # FIXED: Use nested database settings
             
             # Connection Pool Settings
             poolclass=QueuePool,
-            pool_size=settings.DB_POOL_SIZE,
-            max_overflow=settings.DB_MAX_OVERFLOW,
-            pool_timeout=settings.DB_POOL_TIMEOUT,
-            pool_recycle=settings.DB_POOL_RECYCLE,
+            pool_size=settings.database.pool_size,         # FIXED: Use nested settings
+            max_overflow=settings.database.max_overflow,   # FIXED: Use nested settings
+            pool_timeout=settings.database.pool_timeout,   # FIXED: Use nested settings
+            pool_recycle=settings.database.pool_recycle,   # FIXED: Use nested settings
             pool_pre_ping=True,  # Verify connections before use
             
             # Performance Settings
-            echo=settings.DEBUG,  # Log SQL queries in debug mode
-            echo_pool=settings.DEBUG,  # Log connection pool activity
+            echo=settings.debug,  # Log SQL queries in debug mode
+            echo_pool=settings.debug,  # Log connection pool activity
             future=True,  # Use SQLAlchemy 2.0 style
             
             # Connection Settings - FIXED for psycopg2
@@ -64,19 +64,19 @@ class DatabaseManager:
         @event.listens_for(self.engine, "connect")
         def set_connection_pragma(dbapi_connection, connection_record):
             """Configure connection settings."""
-            if settings.DEBUG:
+            if settings.debug:
                 logger.debug("🔗 New database connection established")
         
         @event.listens_for(self.engine, "checkout")
         def receive_checkout(dbapi_connection, connection_record, connection_proxy):
             """Monitor connection checkout."""
-            if settings.DEBUG:
+            if settings.debug:
                 logger.debug("📤 Database connection checked out from pool")
         
         @event.listens_for(self.engine, "checkin")
         def receive_checkin(dbapi_connection, connection_record):
             """Monitor connection checkin."""
-            if settings.DEBUG:
+            if settings.debug:
                 logger.debug("📥 Database connection returned to pool")
     
     def create_tables(self):
@@ -163,5 +163,5 @@ def get_db_stats() -> dict:
     return {
         "connection_pool": db_manager.get_pool_status(),
         "healthy": check_db_health(),
-        "database_url": f"postgresql://{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+        "database_url": f"postgresql://{settings.database.host}:{settings.database.port}/{settings.database.name}"  # FIXED: Use nested settings
     }
