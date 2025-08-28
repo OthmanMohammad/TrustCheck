@@ -165,3 +165,15 @@ def get_db_stats() -> dict:
         "healthy": check_db_health(),
         "database_url": f"postgresql://{settings.database.host}:{settings.database.port}/{settings.database.name}"  # FIXED: Use nested settings
     }
+
+async def init_db():
+    """Initialize database connection for async context."""
+    # For now, just ensure connection is ready
+    db_manager._initialize_engine()
+    logger.info("Database initialized for application startup")
+
+async def close_db():
+    """Close database connections on shutdown."""
+    if db_manager._engine:
+        db_manager._engine.dispose()
+        logger.info("Database connections closed")
