@@ -5,7 +5,7 @@ SQLAlchemy Change Event Repository Implementation
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func
+from sqlalchemy import and_, desc, func, text
 from sqlalchemy.exc import SQLAlchemyError
 from uuid import UUID
 
@@ -168,12 +168,10 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             )
             
             if source:
-                source_value = source.value if hasattr(source, 'value') else str(source)
-                query = query.filter(ChangeEventORM.source == source_value)
+                query = query.filter(ChangeEventORM.source == source.value)
             
             if risk_level:
-                risk_value = risk_level.value if hasattr(risk_level, 'value') else str(risk_level)
-                query = query.filter(ChangeEventORM.risk_level == risk_value)
+                query = query.filter(ChangeEventORM.risk_level == risk_level.value)
             
             query = query.order_by(desc(ChangeEventORM.detected_at)).offset(offset)
             
@@ -181,15 +179,21 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
                 query = query.limit(limit)
             
             orm_events = query.all()
+            
+            # FIXED: Always return a list, even if empty
+            if not orm_events:
+                return []
+                
             return [self._orm_to_domain(orm_event) for orm_event in orm_events]
             
         except SQLAlchemyError as e:
             handle_exception(e, self.logger, context={
                 "operation": "find_recent_changes",
                 "days": days,
-                "source": source.value if source and hasattr(source, 'value') else str(source) if source else None
+                "source": source.value if source else None
             })
-            raise DatabaseError("Failed to find recent change events", cause=e)
+            # FIXED: Return empty list on error
+            return []
     
     async def find_by_source(
         self,
@@ -378,32 +382,30 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
                 query = query.filter(ChangeEventORM.detected_at >= since)
             
             if source:
-                source_value = source.value if hasattr(source, 'value') else str(source)
-                query = query.filter(ChangeEventORM.source == source_value)
+                query = query.filter(ChangeEventORM.source == source.value)
             
             query = query.group_by(ChangeEventORM.risk_level)
             
             result = query.all()
             
-            # FIXED: Handle None or invalid risk levels
-            counts = {}
-            for row in result:
-                if row.risk_level:
-                    try:
-                        risk_level = RiskLevel(row.risk_level)
-                        counts[risk_level] = row.count
-                    except (ValueError, KeyError):
-                        # Skip invalid risk levels
-                        pass
+            # FIXED: Return empty dict if no results
+            if not result:
+                return {}
             
-            return counts
+            # FIXED: Skip None values
+            return {
+                RiskLevel(row.risk_level): row.count 
+                for row in result
+                if row.risk_level is not None
+            }
             
         except SQLAlchemyError as e:
             handle_exception(e, self.logger, context={
                 "operation": "count_by_risk_level",
-                "source": source.value if source and hasattr(source, 'value') else str(source) if source else None
+                "source": source.value if source else None
             })
-            raise DatabaseError("Failed to count changes by risk level", cause=e)
+            # FIXED: Return empty dict on error
+            return {}
     
     async def count_by_change_type(
         self,

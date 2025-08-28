@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from uuid import UUID
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, text
+from sqlalchemy import desc, text, func
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.core.domain.entities import ContentSnapshotDomain
@@ -241,26 +241,22 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
     ) -> List[ContentSnapshotDomain]:
         """Find snapshots with duplicate content hashes."""
         try:
-            source_value = source.value if hasattr(source, 'value') else str(source)
-            
-            # Find duplicate hashes
+            # Fix the SQL query for finding duplicates
             subquery = self.session.query(
-                ContentSnapshotORM.content_hash
+                ContentSnapshotORM.content_hash,
+                func.count(ContentSnapshotORM.snapshot_id).label('count')
             ).filter(
-                ContentSnapshotORM.source == source_value
+                ContentSnapshotORM.source == source.value
             ).group_by(
                 ContentSnapshotORM.content_hash
             ).having(
-                func.count(ContentSnapshotORM.content_hash) > 1
+                func.count(ContentSnapshotORM.snapshot_id) > 1  # Fixed: count snapshot_id not content_hash
             ).subquery()
             
-            # Get all snapshots with duplicate hashes
             orm_snapshots = self.session.query(ContentSnapshotORM).filter(
-                ContentSnapshotORM.source == source_value,
-                ContentSnapshotORM.content_hash.in_(subquery)
-            ).order_by(
-                ContentSnapshotORM.content_hash,
-                desc(ContentSnapshotORM.snapshot_time)
+                ContentSnapshotORM.content_hash.in_(
+                    self.session.query(subquery.c.content_hash)
+                )
             ).all()
             
             return [self._orm_to_domain(orm_snapshot) for orm_snapshot in orm_snapshots]
@@ -268,7 +264,7 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
         except SQLAlchemyError as e:
             handle_exception(e, self.logger, context={
                 "operation": "find_duplicate_hashes",
-                "source": source_value
+                "source": source.value
             })
             raise DatabaseError("Failed to find duplicate hashes", cause=e)
     

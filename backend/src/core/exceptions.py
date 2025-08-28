@@ -344,16 +344,11 @@ class ChangeDetectionError(BusinessLogicError):
     """Change detection specific errors."""
     
     def __init__(self, source: str, stage: str, **kwargs):
-        # Build context without duplication
-        context = kwargs.pop('context', {})
-        context.update({"source": source, "stage": stage})
-        
+        # Don't pass user_message here - it's already in kwargs
         super().__init__(
             rule=f"Change detection failed for {source} during {stage}",
             error_code="CHANGE_DETECTION_ERROR",
-            context=context,
-            user_message=f"Failed to detect changes in {source} data.",
-            **kwargs  # Pass remaining kwargs like 'cause'
+            **kwargs  # This already contains user_message if provided
         )
 
 class RepositoryError(TrustCheckError):
