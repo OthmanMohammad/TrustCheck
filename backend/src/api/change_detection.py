@@ -187,17 +187,17 @@ async def list_changes(
                 source=source
             )
         
-        # Format response
+        # Format response - FIXED: Handle None values properly
         critical_changes_formatted = []
         for change in critical_changes[:10]:
             try:
                 change_dict = {
-                    "event_id": str(change.event_id),
-                    "entity_name": change.entity_name,
-                    "entity_uid": change.entity_uid,
-                    "change_type": change.change_type.value,
-                    "risk_level": change.risk_level.value,
-                    "change_summary": change.change_summary,
+                    "event_id": str(change.event_id) if change.event_id else None,
+                    "entity_name": change.entity_name if change.entity_name else "Unknown",
+                    "entity_uid": change.entity_uid if change.entity_uid else "",
+                    "change_type": change.change_type.value if change.change_type else "UNKNOWN",
+                    "risk_level": change.risk_level.value if change.risk_level else "UNKNOWN",
+                    "change_summary": change.change_summary if change.change_summary else "",
                     "detected_at": change.detected_at.isoformat() if change.detected_at else None
                 }
                 critical_changes_formatted.append(change_dict)
@@ -208,7 +208,7 @@ async def list_changes(
         return {
             "success": True,
             "data": {
-                "summary": summary,
+                "summary": summary if summary else {},
                 "critical_changes": critical_changes_formatted
             },
             "metadata": {
@@ -219,7 +219,6 @@ async def list_changes(
         
     except Exception as e:
         logger.error(f"Error listing changes: {e}", exc_info=True)
-        # Don't use handle_exception here - just return error
         raise HTTPException(status_code=500, detail=f"Failed to list changes: {str(e)}")
 
 @router.get("/changes/critical")
@@ -239,27 +238,27 @@ async def get_critical_changes(
                 source=source
             )
             
-            # Format changes for response
+            # Format changes for response - FIXED: Handle empty results
             formatted_changes = []
-            for change in critical_changes:
+            for change in critical_changes if critical_changes else []:
                 try:
                     field_changes = []
                     if change.field_changes:
                         for fc in change.field_changes:
                             field_changes.append({
-                                "field": fc.field_name,
-                                "old_value": fc.old_value,
-                                "new_value": fc.new_value,
-                                "change_type": fc.change_type
+                                "field": fc.field_name if hasattr(fc, 'field_name') else "unknown",
+                                "old_value": fc.old_value if hasattr(fc, 'old_value') else None,
+                                "new_value": fc.new_value if hasattr(fc, 'new_value') else None,
+                                "change_type": fc.change_type if hasattr(fc, 'change_type') else "unknown"
                             })
                     
                     formatted_changes.append({
-                        "event_id": str(change.event_id),
-                        "entity_name": change.entity_name,
-                        "entity_uid": change.entity_uid,
-                        "source": change.source.value,
-                        "change_type": change.change_type.value,
-                        "change_summary": change.change_summary,
+                        "event_id": str(change.event_id) if change.event_id else None,
+                        "entity_name": change.entity_name if change.entity_name else "Unknown",
+                        "entity_uid": change.entity_uid if change.entity_uid else "",
+                        "source": change.source.value if change.source else "UNKNOWN",
+                        "change_type": change.change_type.value if change.change_type else "UNKNOWN",
+                        "change_summary": change.change_summary if change.change_summary else "",
                         "field_changes": field_changes,
                         "detected_at": change.detected_at.isoformat() if change.detected_at else None,
                         "notification_sent": change.notification_sent_at.isoformat() if change.notification_sent_at else None
