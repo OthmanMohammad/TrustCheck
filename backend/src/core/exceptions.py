@@ -256,12 +256,12 @@ class ScrapingError(ExternalServiceError):
     """Web scraping specific errors."""
     
     def __init__(self, source: str, url: str, **kwargs):
+        kwargs.pop('user_message', None)
         super().__init__(
             service_name="Web Scraper",
             operation=f"scraping {source}",
             error_code=kwargs.pop('error_code', 'SCRAPING_ERROR'),
             context={**kwargs.pop('context', {}), "source": source, "url": url},
-            user_message=f"Failed to retrieve data from {source}.",
             **kwargs
         )
 

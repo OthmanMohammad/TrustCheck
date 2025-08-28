@@ -357,9 +357,9 @@ class SQLAlchemyUnitOfWorkFactory:
             handle_exception(e, self.logger, context={"operation": "create_unit_of_work"})
             raise DatabaseError("Failed to create Unit of Work", cause=e)
     
-    async def create_async_unit_of_work(self) -> SQLAlchemyUnitOfWork:
+    def create_async_unit_of_work(self) -> SQLAlchemyUnitOfWork:
         """Create new async Unit of Work instance."""
-        # For SQLAlchemy, this is the same as sync version
+        # Note: Not async - returns a UoW that has async methods
         return self.create_unit_of_work()
 
 # ======================== DEPENDENCY INJECTION HELPERS ========================

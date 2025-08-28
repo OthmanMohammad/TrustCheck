@@ -555,7 +555,6 @@ class ScrapingOrchestrationService:
             raise ScrapingError(
                 source=request.source.value,
                 url="orchestration",
-                context={"run_id": run_id, "error": str(e)}
             ) from error
     
     async def get_scraping_status(
@@ -638,7 +637,6 @@ class ScrapingOrchestrationService:
             raise ScrapingError(
                 source="system",
                 url="status_query",
-                context={"hours": hours, "error": str(e)}
             ) from error
     
     # ======================== PRIVATE HELPER METHODS ========================
@@ -657,7 +655,6 @@ class ScrapingOrchestrationService:
             raise ScrapingError(
                 source=request.source.value,
                 url="scraper_not_found",
-                context={"error": f"No scraper found for source: {request.source.value}"}
             )
         
         # Execute scraping (this would be adapted to return proper format)

@@ -238,10 +238,18 @@ async def get_critical_changes(
                 source=source
             )
             
+            # FIXED: Ensure we always have a list
+            if not critical_changes:
+                critical_changes = []
+            
             # Format changes for response - FIXED: Handle empty results
             formatted_changes = []
-            for change in critical_changes if critical_changes else []:
+            for change in critical_changes:
                 try:
+                    # FIXED: Check for None values before accessing attributes
+                    if not change:
+                        continue
+                        
                     field_changes = []
                     if change.field_changes:
                         for fc in change.field_changes:
@@ -256,12 +264,12 @@ async def get_critical_changes(
                         "event_id": str(change.event_id) if change.event_id else None,
                         "entity_name": change.entity_name if change.entity_name else "Unknown",
                         "entity_uid": change.entity_uid if change.entity_uid else "",
-                        "source": change.source.value if change.source else "UNKNOWN",
-                        "change_type": change.change_type.value if change.change_type else "UNKNOWN",
+                        "source": change.source.value if change.source and hasattr(change.source, 'value') else "UNKNOWN",
+                        "change_type": change.change_type.value if change.change_type and hasattr(change.change_type, 'value') else "UNKNOWN",
                         "change_summary": change.change_summary if change.change_summary else "",
                         "field_changes": field_changes,
                         "detected_at": change.detected_at.isoformat() if change.detected_at else None,
-                        "notification_sent": change.notification_sent_at.isoformat() if change.notification_sent_at else None
+                        "notification_sent": change.notification_sent_at.isoformat() if hasattr(change, 'notification_sent_at') and change.notification_sent_at else None
                     })
                 except Exception as e:
                     logger.warning(f"Error formatting critical change: {e}")
