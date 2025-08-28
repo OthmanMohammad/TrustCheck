@@ -1,5 +1,5 @@
 """
-Base Repository Implementation with Common SQLAlchemy Operations
+Base Repository Implementation with Common SQLAlchemy Operations - FIXED
 """
 
 from typing import Type, Any, Dict
@@ -19,7 +19,8 @@ class SQLAlchemyBaseRepository:
         self.model_class = model_class
         self.logger = get_logger(f"{self.__class__.__name__}")
     
-    async def begin_transaction(self) -> None:
+    # REMOVED async - these are synchronous operations with SQLAlchemy
+    def begin_transaction(self) -> None:
         """Begin database transaction."""
         try:
             if not self.session.in_transaction():
@@ -28,7 +29,7 @@ class SQLAlchemyBaseRepository:
             handle_exception(e, self.logger, context={"operation": "begin_transaction"})
             raise DatabaseError("Failed to begin transaction", cause=e)
     
-    async def commit_transaction(self) -> None:
+    def commit_transaction(self) -> None:
         """Commit current transaction."""
         try:
             self.session.commit()
@@ -36,7 +37,7 @@ class SQLAlchemyBaseRepository:
             handle_exception(e, self.logger, context={"operation": "commit_transaction"})
             raise DatabaseError("Failed to commit transaction", cause=e)
     
-    async def rollback_transaction(self) -> None:
+    def rollback_transaction(self) -> None:
         """Rollback current transaction."""
         try:
             self.session.rollback()
@@ -44,7 +45,7 @@ class SQLAlchemyBaseRepository:
             handle_exception(e, self.logger, context={"operation": "rollback_transaction"})
             raise DatabaseError("Failed to rollback transaction", cause=e)
     
-    async def health_check(self) -> bool:
+    def health_check(self) -> bool:
         """Check repository health/connectivity."""
         try:
             self.session.execute(text("SELECT 1"))
@@ -52,3 +53,20 @@ class SQLAlchemyBaseRepository:
         except Exception as e:
             self.logger.warning(f"Health check failed: {e}")
             return False
+    
+    # Keep async wrappers for compatibility with async interfaces
+    async def begin_transaction_async(self) -> None:
+        """Async wrapper for begin_transaction."""
+        return self.begin_transaction()
+    
+    async def commit_transaction_async(self) -> None:
+        """Async wrapper for commit_transaction."""
+        return self.commit_transaction()
+    
+    async def rollback_transaction_async(self) -> None:
+        """Async wrapper for rollback_transaction."""
+        return self.rollback_transaction()
+    
+    async def health_check_async(self) -> bool:
+        """Async wrapper for health_check."""
+        return self.health_check()

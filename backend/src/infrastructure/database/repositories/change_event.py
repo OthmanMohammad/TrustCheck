@@ -1,5 +1,5 @@
 """
-SQLAlchemy Change Event Repository Implementation
+SQLAlchemy Change Event Repository Implementation - FIXED
 """
 
 from typing import List, Optional, Dict, Any
@@ -37,7 +37,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
                         change_type=fc.get('change_type', '')
                     ))
         
-        # FIXED: Handle None values for enums
+        # Handle None values for enums
         try:
             source = DataSource(orm_change.source) if orm_change.source else DataSource.OFAC
         except (ValueError, KeyError):
@@ -103,7 +103,8 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             notification_channels=domain_change.notification_channels
         )
     
-    async def create(self, change_event: ChangeEventDomain) -> ChangeEventDomain:
+    # REMOVED async - these are synchronous operations
+    def create(self, change_event: ChangeEventDomain) -> ChangeEventDomain:
         """Create new change event."""
         try:
             orm_change = self._domain_to_orm(change_event)
@@ -119,7 +120,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to create change event", cause=e)
     
-    async def get_by_id(self, event_id: UUID) -> Optional[ChangeEventDomain]:
+    def get_by_id(self, event_id: UUID) -> Optional[ChangeEventDomain]:
         """Get change event by ID."""
         try:
             orm_change = self.session.query(ChangeEventORM).filter(
@@ -135,7 +136,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to get change event", cause=e)
     
-    async def create_many(self, events: List[ChangeEventDomain]) -> List[ChangeEventDomain]:
+    def create_many(self, events: List[ChangeEventDomain]) -> List[ChangeEventDomain]:
         """Create multiple change events efficiently."""
         try:
             orm_events = [self._domain_to_orm(event) for event in events]
@@ -151,7 +152,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to create multiple change events", cause=e)
     
-    async def find_recent(
+    def find_recent(
         self,
         days: int = 7,
         source: Optional[DataSource] = None,
@@ -180,7 +181,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             
             orm_events = query.all()
             
-            # FIXED: Always return a list, even if empty
+            # Always return a list, even if empty
             if not orm_events:
                 return []
                 
@@ -192,131 +193,10 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
                 "days": days,
                 "source": source.value if source else None
             })
-            # FIXED: Return empty list on error
+            # Return empty list on error
             return []
     
-    async def find_by_source(
-        self,
-        source: DataSource,
-        since: Optional[datetime] = None,
-        limit: Optional[int] = None,
-        offset: int = 0
-    ) -> List[ChangeEventDomain]:
-        """Find change events by source."""
-        try:
-            source_value = source.value if hasattr(source, 'value') else str(source)
-            query = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.source == source_value
-            )
-            
-            if since:
-                query = query.filter(ChangeEventORM.detected_at >= since)
-            
-            query = query.order_by(desc(ChangeEventORM.detected_at)).offset(offset)
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_events = query.all()
-            return [self._orm_to_domain(orm_event) for orm_event in orm_events]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_by_source",
-                "source": source_value if source else None
-            })
-            raise DatabaseError("Failed to find changes by source", cause=e)
-    
-    async def find_by_entity(
-        self,
-        entity_uid: str,
-        limit: Optional[int] = None,
-        offset: int = 0
-    ) -> List[ChangeEventDomain]:
-        """Find all changes for specific entity."""
-        try:
-            query = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.entity_uid == entity_uid
-            ).order_by(desc(ChangeEventORM.detected_at)).offset(offset)
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_events = query.all()
-            return [self._orm_to_domain(orm_event) for orm_event in orm_events]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_by_entity",
-                "entity_uid": entity_uid
-            })
-            raise DatabaseError("Failed to find changes by entity", cause=e)
-    
-    async def find_by_change_type(
-        self,
-        change_type: ChangeType,
-        since: Optional[datetime] = None,
-        limit: Optional[int] = None,
-        offset: int = 0
-    ) -> List[ChangeEventDomain]:
-        """Find changes by type."""
-        try:
-            change_value = change_type.value if hasattr(change_type, 'value') else str(change_type)
-            query = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.change_type == change_value
-            )
-            
-            if since:
-                query = query.filter(ChangeEventORM.detected_at >= since)
-            
-            query = query.order_by(desc(ChangeEventORM.detected_at)).offset(offset)
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_events = query.all()
-            return [self._orm_to_domain(orm_event) for orm_event in orm_events]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_by_change_type",
-                "change_type": change_value
-            })
-            raise DatabaseError("Failed to find changes by type", cause=e)
-    
-    async def find_by_risk_level(
-        self,
-        risk_level: RiskLevel,
-        since: Optional[datetime] = None,
-        limit: Optional[int] = None,
-        offset: int = 0
-    ) -> List[ChangeEventDomain]:
-        """Find changes by risk level."""
-        try:
-            risk_value = risk_level.value if hasattr(risk_level, 'value') else str(risk_level)
-            query = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.risk_level == risk_value
-            )
-            
-            if since:
-                query = query.filter(ChangeEventORM.detected_at >= since)
-            
-            query = query.order_by(desc(ChangeEventORM.detected_at)).offset(offset)
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_events = query.all()
-            return [self._orm_to_domain(orm_event) for orm_event in orm_events]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_by_risk_level",
-                "risk_level": risk_value
-            })
-            raise DatabaseError("Failed to find changes by risk level", cause=e)
-    
-    async def find_critical_changes(
+    def find_critical_changes(
         self,
         since: Optional[datetime] = None,
         limit: Optional[int] = None
@@ -344,29 +224,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to find critical changes", cause=e)
     
-    async def find_pending_notifications(
-        self,
-        limit: Optional[int] = None
-    ) -> List[ChangeEventDomain]:
-        """Find changes that need notification dispatch."""
-        try:
-            query = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.notification_sent_at.is_(None)
-            ).order_by(desc(ChangeEventORM.detected_at))
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_events = query.all()
-            return [self._orm_to_domain(orm_event) for orm_event in orm_events]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_pending_notifications"
-            })
-            raise DatabaseError("Failed to find pending notifications", cause=e)
-    
-    async def count_by_risk_level(
+    def count_by_risk_level(
         self,
         since: Optional[datetime] = None,
         source: Optional[DataSource] = None
@@ -388,11 +246,11 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             
             result = query.all()
             
-            # FIXED: Return empty dict if no results
+            # Return empty dict if no results
             if not result:
                 return {}
             
-            # FIXED: Skip None values
+            # Skip None values
             return {
                 RiskLevel(row.risk_level): row.count 
                 for row in result
@@ -404,10 +262,10 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
                 "operation": "count_by_risk_level",
                 "source": source.value if source else None
             })
-            # FIXED: Return empty dict on error
+            # Return empty dict on error
             return {}
     
-    async def count_by_change_type(
+    def count_by_change_type(
         self,
         since: Optional[datetime] = None,
         source: Optional[DataSource] = None
@@ -430,7 +288,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             
             result = query.all()
             
-            # FIXED: Handle None or invalid change types
+            # Handle None or invalid change types
             counts = {}
             for row in result:
                 if row.change_type:
@@ -450,7 +308,7 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to count changes by change type", cause=e)
     
-    async def get_change_summary(
+    def get_change_summary(
         self,
         days: int = 7,
         source: Optional[DataSource] = None
@@ -459,8 +317,8 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
         try:
             since = datetime.utcnow() - timedelta(days=days)
             
-            risk_counts = await self.count_by_risk_level(since=since, source=source)
-            type_counts = await self.count_by_change_type(since=since, source=source)
+            risk_counts = self.count_by_risk_level(since=since, source=source)
+            type_counts = self.count_by_change_type(since=since, source=source)
             
             total_changes = sum(risk_counts.values())
             
@@ -486,59 +344,38 @@ class SQLAlchemyChangeEventRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to get change summary", cause=e)
     
-    async def mark_notification_sent(
-        self,
-        event_id: UUID,
-        channels: List[str],
-        sent_at: Optional[datetime] = None
-    ) -> bool:
-        """Mark change event notification as sent."""
-        try:
-            orm_event = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.event_id == event_id
-            ).first()
-            
-            if orm_event:
-                orm_event.notification_sent_at = sent_at or datetime.utcnow()
-                orm_event.notification_channels = channels
-                self.session.flush()
-                return True
-            
-            return False
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "mark_notification_sent",
-                "event_id": str(event_id)
-            })
-            raise DatabaseError("Failed to mark notification as sent", cause=e)
+    # Keep async versions for compatibility
+    async def create_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.create(*args, **kwargs)
     
-    async def mark_many_notifications_sent(
-        self,
-        event_ids: List[UUID],
-        channels: List[str],
-        sent_at: Optional[datetime] = None
-    ) -> int:
-        """Mark multiple notifications as sent. Returns count updated."""
-        try:
-            notification_time = sent_at or datetime.utcnow()
-            
-            updated_count = self.session.query(ChangeEventORM).filter(
-                ChangeEventORM.event_id.in_(event_ids)
-            ).update({
-                'notification_sent_at': notification_time,
-                'notification_channels': channels
-            }, synchronize_session=False)
-            
-            self.session.flush()
-            return updated_count
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "mark_many_notifications_sent",
-                "event_count": len(event_ids)
-            })
-            raise DatabaseError("Failed to mark notifications as sent", cause=e)
+    async def get_by_id_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_by_id(*args, **kwargs)
+    
+    async def create_many_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.create_many(*args, **kwargs)
+    
+    async def find_recent_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.find_recent(*args, **kwargs)
+    
+    async def find_critical_changes_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.find_critical_changes(*args, **kwargs)
+    
+    async def count_by_risk_level_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.count_by_risk_level(*args, **kwargs)
+    
+    async def count_by_change_type_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.count_by_change_type(*args, **kwargs)
+    
+    async def get_change_summary_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_change_summary(*args, **kwargs)
     
     async def health_check(self) -> bool:
         """Check repository health/connectivity."""

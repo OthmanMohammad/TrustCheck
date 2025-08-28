@@ -1,12 +1,12 @@
 """
-Base schemas for API requests and responses - FIXED for Pydantic v2.
+Base schemas for API requests and responses - FIXED with proper validation.
 
 Provides common base classes and utilities for all API DTOs.
 """
 
 from typing import Any, Dict, Optional, Generic, TypeVar, List, Union
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict, field_validator, field_serializer
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from pydantic.functional_validators import AfterValidator
 from typing_extensions import Annotated
 from enum import Enum
@@ -54,7 +54,7 @@ class TimestampedSchema(BaseSchema):
         description="Last update timestamp in UTC"
     )
 
-# ======================== REQUEST MODELS ========================
+# ======================== REQUEST MODELS WITH VALIDATION ========================
 
 class PaginationRequest(BaseSchema):
     """Common pagination parameters for list endpoints."""
@@ -74,8 +74,18 @@ class PaginationRequest(BaseSchema):
     @classmethod
     def validate_limit(cls, v: int) -> int:
         """Ensure reasonable limits."""
+        if v < 1:
+            raise ValueError("Limit must be at least 1")
         if v > 1000:
             raise ValueError("Limit cannot exceed 1000")
+        return v
+    
+    @field_validator('offset')
+    @classmethod
+    def validate_offset(cls, v: int) -> int:
+        """Ensure non-negative offset."""
+        if v < 0:
+            raise ValueError("Offset cannot be negative")
         return v
 
 class FilterRequest(BaseSchema):
@@ -105,15 +115,13 @@ class DateRangeFilter(BaseSchema):
         description="End date (inclusive)"
     )
     
-    @field_validator('end_date')
-    @classmethod
-    def validate_date_range(cls, end_date: Optional[datetime], info) -> Optional[datetime]:
+    @model_validator(mode='after')
+    def validate_date_range(self) -> 'DateRangeFilter':
         """Ensure end_date is after start_date."""
-        if end_date and 'start_date' in info.data:
-            start_date = info.data['start_date']
-            if start_date and end_date < start_date:
+        if self.end_date and self.start_date:
+            if self.end_date < self.start_date:
                 raise ValueError("end_date must be after start_date")
-        return end_date
+        return self
 
 # ======================== RESPONSE MODELS ========================
 

@@ -1,5 +1,5 @@
 """
-SQLAlchemy Content Snapshot Repository Implementation
+SQLAlchemy Content Snapshot Repository Implementation - FIXED
 """
 
 from typing import List, Optional, Dict, Any
@@ -25,7 +25,7 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
     def _orm_to_domain(self, orm_snapshot: ContentSnapshotORM) -> ContentSnapshotDomain:
         """Convert ORM model to domain entity - FIXED to handle None values."""
         
-        # FIXED: Handle None values for enums
+        # Handle None values for enums
         try:
             source = DataSource(orm_snapshot.source) if orm_snapshot.source else DataSource.OFAC
         except (ValueError, KeyError):
@@ -53,7 +53,8 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
             s3_archive_path=domain_snapshot.s3_archive_path
         )
     
-    async def create(self, snapshot: ContentSnapshotDomain) -> ContentSnapshotDomain:
+    # REMOVED async - these are synchronous operations
+    def create(self, snapshot: ContentSnapshotDomain) -> ContentSnapshotDomain:
         """Create content snapshot."""
         try:
             orm_snapshot = self._domain_to_orm(snapshot)
@@ -69,7 +70,7 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to create content snapshot", cause=e)
     
-    async def get_by_id(self, snapshot_id: UUID) -> Optional[ContentSnapshotDomain]:
+    def get_by_id(self, snapshot_id: UUID) -> Optional[ContentSnapshotDomain]:
         """Get snapshot by ID."""
         try:
             orm_snapshot = self.session.query(ContentSnapshotORM).filter(
@@ -85,23 +86,7 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to get snapshot", cause=e)
     
-    async def get_by_content_hash(self, content_hash: str) -> Optional[ContentSnapshotDomain]:
-        """Get snapshot by content hash."""
-        try:
-            orm_snapshot = self.session.query(ContentSnapshotORM).filter(
-                ContentSnapshotORM.content_hash == content_hash
-            ).first()
-            
-            return self._orm_to_domain(orm_snapshot) if orm_snapshot else None
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "get_snapshot_by_hash",
-                "content_hash": content_hash
-            })
-            raise DatabaseError("Failed to get snapshot by hash", cause=e)
-    
-    async def get_latest_snapshot(
+    def get_latest_snapshot(
         self,
         source: DataSource
     ) -> Optional[ContentSnapshotDomain]:
@@ -121,26 +106,7 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to get latest snapshot", cause=e)
     
-    async def find_by_scraper_run(
-        self,
-        run_id: str
-    ) -> Optional[ContentSnapshotDomain]:
-        """Find snapshot by scraper run ID."""
-        try:
-            orm_snapshot = self.session.query(ContentSnapshotORM).filter(
-                ContentSnapshotORM.scraper_run_id == run_id
-            ).first()
-            
-            return self._orm_to_domain(orm_snapshot) if orm_snapshot else None
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_snapshot_by_run",
-                "run_id": run_id
-            })
-            raise DatabaseError("Failed to find snapshot by run", cause=e)
-    
-    async def get_last_content_hash(self, source: DataSource) -> Optional[str]:
+    def get_last_content_hash(self, source: DataSource) -> Optional[str]:
         """Get content hash from most recent snapshot."""
         try:
             source_value = source.value if hasattr(source, 'value') else str(source)
@@ -157,14 +123,14 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to get last content hash", cause=e)
     
-    async def has_content_changed(
+    def has_content_changed(
         self,
         source: DataSource,
         new_content_hash: str
     ) -> bool:
         """Check if content has changed since last snapshot."""
         try:
-            last_hash = await self.get_last_content_hash(source)
+            last_hash = self.get_last_content_hash(source)
             return last_hash != new_content_hash if last_hash else True
             
         except Exception as e:
@@ -175,187 +141,26 @@ class SQLAlchemyContentSnapshotRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to check content change", cause=e)
     
-    async def find_by_source(
-        self,
-        source: DataSource,
-        limit: Optional[int] = None,
-        offset: int = 0
-    ) -> List[ContentSnapshotDomain]:
-        """Find snapshots by source, ordered by time desc."""
-        try:
-            source_value = source.value if hasattr(source, 'value') else str(source)
-            query = self.session.query(ContentSnapshotORM).filter(
-                ContentSnapshotORM.source == source_value
-            ).order_by(desc(ContentSnapshotORM.snapshot_time)).offset(offset)
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_snapshots = query.all()
-            return [self._orm_to_domain(orm_snapshot) for orm_snapshot in orm_snapshots]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_by_source",
-                "source": source_value
-            })
-            raise DatabaseError("Failed to find snapshots by source", cause=e)
+    # Keep async versions for compatibility
+    async def create_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.create(*args, **kwargs)
     
-    async def find_recent(
-        self,
-        hours: int = 24,
-        source: Optional[DataSource] = None,
-        limit: Optional[int] = None
-    ) -> List[ContentSnapshotDomain]:
-        """Find recent snapshots."""
-        try:
-            since = datetime.utcnow() - timedelta(hours=hours)
-            
-            query = self.session.query(ContentSnapshotORM).filter(
-                ContentSnapshotORM.snapshot_time >= since
-            )
-            
-            if source:
-                source_value = source.value if hasattr(source, 'value') else str(source)
-                query = query.filter(ContentSnapshotORM.source == source_value)
-            
-            query = query.order_by(desc(ContentSnapshotORM.snapshot_time))
-            
-            if limit:
-                query = query.limit(limit)
-            
-            orm_snapshots = query.all()
-            return [self._orm_to_domain(orm_snapshot) for orm_snapshot in orm_snapshots]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_recent_snapshots",
-                "hours": hours,
-                "source": source.value if source and hasattr(source, 'value') else str(source) if source else None
-            })
-            raise DatabaseError("Failed to find recent snapshots", cause=e)
+    async def get_by_id_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_by_id(*args, **kwargs)
     
-    async def find_duplicate_hashes(
-        self,
-        source: DataSource
-    ) -> List[ContentSnapshotDomain]:
-        """Find snapshots with duplicate content hashes."""
-        try:
-            # Fix the SQL query for finding duplicates
-            subquery = self.session.query(
-                ContentSnapshotORM.content_hash,
-                func.count(ContentSnapshotORM.snapshot_id).label('count')
-            ).filter(
-                ContentSnapshotORM.source == source.value
-            ).group_by(
-                ContentSnapshotORM.content_hash
-            ).having(
-                func.count(ContentSnapshotORM.snapshot_id) > 1  # Fixed: count snapshot_id not content_hash
-            ).subquery()
-            
-            orm_snapshots = self.session.query(ContentSnapshotORM).filter(
-                ContentSnapshotORM.content_hash.in_(
-                    self.session.query(subquery.c.content_hash)
-                )
-            ).all()
-            
-            return [self._orm_to_domain(orm_snapshot) for orm_snapshot in orm_snapshots]
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "find_duplicate_hashes",
-                "source": source.value
-            })
-            raise DatabaseError("Failed to find duplicate hashes", cause=e)
+    async def get_latest_snapshot_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_latest_snapshot(*args, **kwargs)
     
-    async def cleanup_old_snapshots(
-        self,
-        older_than_days: int = 30,
-        keep_count: int = 10
-    ) -> int:
-        """Clean up old snapshots, keeping recent ones. Returns count deleted."""
-        try:
-            cutoff_date = datetime.utcnow() - timedelta(days=older_than_days)
-            
-            # For each source, keep the most recent keep_count snapshots
-            sources = self.session.query(
-                ContentSnapshotORM.source
-            ).distinct().all()
-            
-            total_deleted = 0
-            
-            for (source,) in sources:
-                # Get IDs to keep
-                keep_ids = self.session.query(
-                    ContentSnapshotORM.snapshot_id
-                ).filter(
-                    ContentSnapshotORM.source == source
-                ).order_by(
-                    desc(ContentSnapshotORM.snapshot_time)
-                ).limit(keep_count).all()
-                
-                keep_id_list = [id[0] for id in keep_ids]
-                
-                # Delete old snapshots not in keep list
-                deleted = self.session.query(ContentSnapshotORM).filter(
-                    ContentSnapshotORM.source == source,
-                    ContentSnapshotORM.snapshot_time < cutoff_date,
-                    ~ContentSnapshotORM.snapshot_id.in_(keep_id_list)
-                ).delete(synchronize_session=False)
-                
-                total_deleted += deleted
-            
-            self.session.flush()
-            return total_deleted
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "cleanup_old_snapshots",
-                "older_than_days": older_than_days
-            })
-            raise DatabaseError("Failed to cleanup old snapshots", cause=e)
+    async def get_last_content_hash_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_last_content_hash(*args, **kwargs)
     
-    async def get_storage_statistics(self) -> Dict[str, Any]:
-        """Get storage statistics for snapshots."""
-        try:
-            from sqlalchemy import func
-            
-            # Get total stats
-            total_stats = self.session.query(
-                func.count(ContentSnapshotORM.snapshot_id).label('total_snapshots'),
-                func.sum(ContentSnapshotORM.content_size_bytes).label('total_size_bytes'),
-                func.min(ContentSnapshotORM.snapshot_time).label('oldest_snapshot'),
-                func.max(ContentSnapshotORM.snapshot_time).label('newest_snapshot')
-            ).first()
-            
-            # Get stats by source
-            source_stats = self.session.query(
-                ContentSnapshotORM.source,
-                func.count(ContentSnapshotORM.snapshot_id).label('count'),
-                func.sum(ContentSnapshotORM.content_size_bytes).label('size_bytes')
-            ).group_by(ContentSnapshotORM.source).all()
-            
-            return {
-                'total_snapshots': total_stats.total_snapshots or 0,
-                'total_size_bytes': total_stats.total_size_bytes or 0,
-                'total_size_mb': (total_stats.total_size_bytes or 0) / (1024 * 1024),
-                'oldest_snapshot': total_stats.oldest_snapshot.isoformat() if total_stats.oldest_snapshot else None,
-                'newest_snapshot': total_stats.newest_snapshot.isoformat() if total_stats.newest_snapshot else None,
-                'by_source': {
-                    row.source: {
-                        'count': row.count,
-                        'size_bytes': row.size_bytes or 0,
-                        'size_mb': (row.size_bytes or 0) / (1024 * 1024)
-                    }
-                    for row in source_stats
-                }
-            }
-            
-        except SQLAlchemyError as e:
-            handle_exception(e, self.logger, context={
-                "operation": "get_storage_statistics"
-            })
-            raise DatabaseError("Failed to get storage statistics", cause=e)
+    async def has_content_changed_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.has_content_changed(*args, **kwargs)
     
     async def health_check(self) -> bool:
         """Check repository health/connectivity."""
