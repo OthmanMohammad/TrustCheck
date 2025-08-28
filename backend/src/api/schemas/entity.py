@@ -1,12 +1,12 @@
 """
-Entity schemas for sanctioned entities API.
+Entity schemas for sanctioned entities API - FIXED with proper validation.
 
 DTOs for entity-related requests and responses.
 """
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from enum import Enum
 
 from src.api.schemas.base import (
@@ -48,10 +48,10 @@ class PersonalInfoDTO(BaseSchema):
     place_of_birth: Optional[str] = Field(None, max_length=500)
     nationality: Optional[str] = Field(None, max_length=100)
 
-# ======================== ENTITY REQUESTS ========================
+# ======================== ENTITY REQUESTS WITH PROPER VALIDATION ========================
 
 class EntitySearchRequest(PaginationRequest):
-    """Request for entity search."""
+    """Request for entity search with proper validation."""
     query: str = Field(
         ...,
         min_length=2,
@@ -70,14 +70,32 @@ class EntitySearchRequest(PaginationRequest):
         None,
         description="Filter by entity types"
     )
+    
+    @field_validator('query')
+    @classmethod
+    def validate_query_length(cls, v: str) -> str:
+        """Ensure query has minimum length."""
+        v = v.strip()
+        if len(v) < 2:
+            raise ValueError("Search query must be at least 2 characters")
+        if len(v) > 200:
+            raise ValueError("Search query cannot exceed 200 characters")
+        return v
 
 class EntityFilterRequest(PaginationRequest, FilterRequest):
-    """Request for entity listing with filters."""
+    """Request for entity listing with filters and validation."""
     source: Optional[DataSource] = Field(None, description="Filter by data source")
     entity_type: Optional[EntityType] = Field(None, description="Filter by entity type")
     program: Optional[str] = Field(None, max_length=100, description="Filter by sanctions program")
     nationality: Optional[str] = Field(None, max_length=100, description="Filter by nationality")
     high_risk_only: bool = Field(default=False, description="Return only high-risk entities")
+    
+    # Ensure proper inheritance of validators
+    model_config = ConfigDict(
+        validate_assignment=True,
+        extra='forbid',
+        use_enum_values=False  # Keep enums as enums for proper validation
+    )
 
 class EntityBulkRequest(BaseSchema):
     """Request for bulk entity operations."""

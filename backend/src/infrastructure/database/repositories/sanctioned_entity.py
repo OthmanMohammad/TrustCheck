@@ -1,5 +1,5 @@
 """
-SQLAlchemy Sanctioned Entity Repository Implementation
+SQLAlchemy Sanctioned Entity Repository Implementation - FIXED
 """
 
 from typing import List, Optional, Dict, Any
@@ -101,8 +101,8 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             content_hash=domain_entity.content_hash
         )
     
-    # FIXED: Add method to get all entities when no filter is provided
-    async def find_all(
+    # REMOVED async - these are synchronous operations
+    def find_all(
         self,
         active_only: bool = True,
         limit: Optional[int] = None,
@@ -134,7 +134,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to retrieve all entities", cause=e)
     
-    async def create(self, entity: SanctionedEntityDomain) -> SanctionedEntityDomain:
+    def create(self, entity: SanctionedEntityDomain) -> SanctionedEntityDomain:
         """Create new sanctioned entity."""
         try:
             orm_entity = self._domain_to_orm(entity)
@@ -156,7 +156,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to create entity", cause=e)
     
-    async def get_by_uid(self, uid: str) -> Optional[SanctionedEntityDomain]:
+    def get_by_uid(self, uid: str) -> Optional[SanctionedEntityDomain]:
         """Get entity by unique identifier."""
         try:
             orm_entity = self.session.query(SanctionedEntityORM).filter(
@@ -172,7 +172,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to retrieve entity", cause=e)
     
-    async def find_by_source(
+    def find_by_source(
         self, 
         source: DataSource, 
         active_only: bool = True,
@@ -203,7 +203,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to query entities by source", cause=e)
     
-    async def find_by_entity_type(
+    def find_by_entity_type(
         self, 
         entity_type: EntityType,
         limit: Optional[int] = None,
@@ -231,7 +231,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to query entities by type", cause=e)
     
-    async def search_by_name(
+    def search_by_name(
         self, 
         name: str, 
         fuzzy: bool = False,
@@ -263,9 +263,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
                     or_(
                         SanctionedEntityORM.name.ilike(f'%{name}%'),
                         # For JSON arrays, we need to cast to text for LIKE comparison
-                        self.session.query(SanctionedEntityORM).filter(
-                            func.cast(SanctionedEntityORM.aliases, String).ilike(f'%{name}%')
-                        ).exists()
+                        func.cast(SanctionedEntityORM.aliases, String).ilike(f'%{name}%')
                     ),
                     SanctionedEntityORM.is_active == True
                 )
@@ -284,7 +282,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             })
             raise DatabaseError("Failed to search entities by name", cause=e)
     
-    async def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> Dict[str, Any]:
         """Get repository statistics."""
         try:
             # Total counts
@@ -324,7 +322,7 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
             handle_exception(e, self.logger, context={"operation": "get_statistics"})
             raise DatabaseError("Failed to get repository statistics", cause=e)
     
-    async def get_all_for_change_detection(
+    def get_all_for_change_detection(
         self, 
         source: DataSource
     ) -> List[SanctionedEntityDomain]:
@@ -343,3 +341,44 @@ class SQLAlchemySanctionedEntityRepository(SQLAlchemyBaseRepository):
                 "source": source.value
             })
             raise DatabaseError("Failed to get entities for change detection", cause=e)
+    
+    # Keep async versions for compatibility with interfaces that expect them
+    async def find_all_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.find_all(*args, **kwargs)
+    
+    async def create_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.create(*args, **kwargs)
+    
+    async def get_by_uid_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_by_uid(*args, **kwargs)
+    
+    async def find_by_source_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.find_by_source(*args, **kwargs)
+    
+    async def find_by_entity_type_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.find_by_entity_type(*args, **kwargs)
+    
+    async def search_by_name_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.search_by_name(*args, **kwargs)
+    
+    async def get_statistics_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_statistics(*args, **kwargs)
+    
+    async def get_all_for_change_detection_async(self, *args, **kwargs):
+        """Async wrapper for compatibility."""
+        return self.get_all_for_change_detection(*args, **kwargs)
+    
+    async def health_check(self) -> bool:
+        """Check repository health/connectivity."""
+        try:
+            self.session.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False

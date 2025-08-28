@@ -1,12 +1,12 @@
 """
-Change detection schemas for API.
+Change detection schemas for API - FIXED with proper validation.
 
 DTOs for change events, scraper runs, and notifications.
 """
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from uuid import UUID
 
 from src.api.schemas.base import (
@@ -68,7 +68,7 @@ class ChangeEventDetailDTO(ChangeEventSummaryDTO):
         description="Notification channels used"
     )
 
-# ======================== CHANGE REQUESTS ========================
+# ======================== CHANGE REQUESTS WITH VALIDATION ========================
 
 class ChangeFilterRequest(PaginationRequest, DateRangeFilter):
     """Request for filtering change events."""
@@ -78,8 +78,14 @@ class ChangeFilterRequest(PaginationRequest, DateRangeFilter):
     entity_uid: Optional[EntityUID] = Field(None, description="Filter by entity UID")
     notification_sent: Optional[bool] = Field(None, description="Filter by notification status")
     
+    model_config = ConfigDict(
+        validate_assignment=True,
+        extra='forbid',
+        use_enum_values=False  # Keep enums for validation
+    )
+
 class ChangeSummaryRequest(BaseSchema):
-    """Request for change summary."""
+    """Request for change summary with validation."""
     days: int = Field(
         default=7,
         ge=1,
@@ -88,9 +94,19 @@ class ChangeSummaryRequest(BaseSchema):
     )
     source: Optional[DataSource] = Field(None, description="Filter by source")
     risk_level: Optional[RiskLevel] = Field(None, description="Filter by risk level")
+    
+    @field_validator('days')
+    @classmethod
+    def validate_days(cls, v: int) -> int:
+        """Validate days range."""
+        if v < 1:
+            raise ValueError("Days must be at least 1")
+        if v > 90:
+            raise ValueError("Days cannot exceed 90")
+        return v
 
 class CriticalChangesRequest(BaseSchema):
-    """Request for critical changes."""
+    """Request for critical changes with validation."""
     hours: int = Field(
         default=24,
         ge=1,
@@ -98,6 +114,16 @@ class CriticalChangesRequest(BaseSchema):
         description="Hours to look back (max 7 days)"
     )
     source: Optional[DataSource] = Field(None, description="Filter by source")
+    
+    @field_validator('hours')
+    @classmethod
+    def validate_hours(cls, v: int) -> int:
+        """Validate hours range."""
+        if v < 1:
+            raise ValueError("Hours must be at least 1")
+        if v > 168:
+            raise ValueError("Hours cannot exceed 168 (7 days)")
+        return v
 
 # ======================== SCRAPER RUN MODELS ========================
 
@@ -140,7 +166,7 @@ class ScraperRunDetailDTO(ScraperRunSummaryDTO):
     retry_count: int = Field(default=0, description="Number of retries")
 
 class ScraperRunRequest(BaseSchema):
-    """Request to start a scraper run."""
+    """Request to start a scraper run with validation."""
     source: DataSource = SOURCE_FIELD
     force_update: bool = Field(
         default=False,
@@ -152,6 +178,16 @@ class ScraperRunRequest(BaseSchema):
         le=3600,
         description="Timeout in seconds"
     )
+    
+    @field_validator('timeout_seconds')
+    @classmethod
+    def validate_timeout(cls, v: int) -> int:
+        """Validate timeout range."""
+        if v < 10:
+            raise ValueError("Timeout must be at least 10 seconds")
+        if v > 3600:
+            raise ValueError("Timeout cannot exceed 3600 seconds (1 hour)")
+        return v
 
 # ======================== RESPONSE MODELS ========================
 
