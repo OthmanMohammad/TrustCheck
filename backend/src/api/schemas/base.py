@@ -1,14 +1,17 @@
 """
-Base schemas for API requests and responses.
+Base schemas for API requests and responses - FIXED for Pydantic v2.
 
 Provides common base classes and utilities for all API DTOs.
 """
 
-from typing import Any, Dict, Optional, Generic, TypeVar, List
+from typing import Any, Dict, Optional, Generic, TypeVar, List, Union
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, field_serializer
+from pydantic.functional_validators import AfterValidator
+from typing_extensions import Annotated
 from enum import Enum
 from uuid import UUID
+import re
 
 # ======================== CONFIGURATION ========================
 
@@ -34,9 +37,9 @@ class BaseSchema(BaseModel):
         },
         # Forbid extra fields by default
         extra='forbid',
-        # Serialize datetime as ISO string
+        # Serialize datetime to ISO format automatically
         json_encoders={
-            datetime: lambda v: v.isoformat()
+            datetime: lambda v: v.isoformat() if v else None
         }
     )
 
@@ -188,43 +191,32 @@ class ErrorResponse(BaseSchema):
 
 # ======================== VALIDATION UTILITIES ========================
 
-class StrictString(str):
+def validate_strict_string(v: Any) -> str:
     """String that strips whitespace and validates length."""
-    
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-    
-    @classmethod
-    def validate(cls, v):
-        if not isinstance(v, str):
-            raise TypeError("String required")
-        v = v.strip()
-        if not v:
-            raise ValueError("String cannot be empty")
-        if len(v) > 500:
-            raise ValueError("String too long (max 500 characters)")
-        return v
+    if not isinstance(v, str):
+        raise TypeError("String required")
+    v = v.strip()
+    if not v:
+        raise ValueError("String cannot be empty")
+    if len(v) > 500:
+        raise ValueError("String too long (max 500 characters)")
+    return v
 
-class EntityUID(str):
+def validate_entity_uid(v: Any) -> str:
     """Validated entity UID."""
-    
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-    
-    @classmethod
-    def validate(cls, v):
-        if not isinstance(v, str):
-            raise TypeError("UID must be a string")
-        v = v.strip()
-        if not v:
-            raise ValueError("UID cannot be empty")
-        # Validate UID format (alphanumeric with hyphens/underscores)
-        import re
-        if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
-            raise ValueError("Invalid UID format")
-        return v
+    if not isinstance(v, str):
+        raise TypeError("UID must be a string")
+    v = v.strip()
+    if not v:
+        raise ValueError("UID cannot be empty")
+    # Validate UID format (alphanumeric with hyphens/underscores)
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
+        raise ValueError("Invalid UID format")
+    return v
+
+# Create Pydantic v2 compatible annotated types
+StrictString = Annotated[str, AfterValidator(validate_strict_string)]
+EntityUID = Annotated[str, AfterValidator(validate_entity_uid)]
 
 # ======================== COMMON FIELD DEFINITIONS ========================
 
