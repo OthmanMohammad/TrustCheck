@@ -50,9 +50,9 @@ from src.api.schemas.entity import (
 )
 from src.api.schemas.change_detection import (
     ChangeFilterRequest, ChangeSummaryRequest, CriticalChangesRequest,
-    ChangeEventSummaryDTO, ChangeEventDetailDTO, ChangeSummaryDTO,
+    ChangeEventSummaryDTO, ChangeEventDetailDTO, ChangeSummaryDTO, ScraperRunResponse, 
     ChangeEventListResponse, CriticalChangesResponse, ChangeSummaryResponse,
-    ScraperRunRequest, ScraperRunSummaryDTO, ScraperRunDetailDTO,
+    ScraperRunRequest, ScraperRunSummaryDTO, ScraperRunDetailDTO, BaseResponse,
     ScraperRunListResponse, ScrapingStatusDTO, ScrapingStatusResponse,
     change_event_domain_to_summary, change_event_domain_to_detail,
     scraper_run_domain_to_summary, scraper_run_domain_to_detail
