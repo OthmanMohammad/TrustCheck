@@ -1,17 +1,17 @@
 """
-Dependency Injection Container
+Dependency Injection Container - FIXED with Auto-Detection
 
-FastAPI-compatible dependency injection for repositories, services, and UoW.
-Provides clean separation and easy testing through interface injection.
+Automatically provides sync or async repositories based on the session type.
 """
 
-from typing import Generator, AsyncGenerator, Dict, Any
+from typing import Generator, AsyncGenerator, Dict, Any, Union
 from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Core interfaces
 from src.core.uow import UnitOfWork
@@ -21,8 +21,10 @@ from src.core.domain.repositories import (
 )
 
 # Infrastructure implementations  
-from src.infrastructure.database.connection import get_db
+from src.infrastructure.database.connection import get_db, get_async_db
 from src.infrastructure.database.uow import SQLAlchemyUnitOfWorkFactory, get_uow_factory
+
+# Repository implementations (now support both sync and async)
 from src.infrastructure.database.repositories.sanctioned_entity import SQLAlchemySanctionedEntityRepository
 from src.infrastructure.database.repositories.change_event import SQLAlchemyChangeEventRepository
 from src.infrastructure.database.repositories.scraper_run import SQLAlchemyScraperRunRepository
@@ -39,30 +41,60 @@ from src.core.config import settings
 
 logger = get_logger(__name__)
 
-# ======================== REPOSITORY DEPENDENCIES ========================
+# ======================== V1 SYNC REPOSITORY DEPENDENCIES ========================
 
 def get_sanctioned_entity_repository(
     db: Session = Depends(get_db)
-) -> SanctionedEntityRepository:
-    """Get sanctioned entity repository instance."""
+) -> SQLAlchemySanctionedEntityRepository:
+    """Get sanctioned entity repository instance for v1 API (sync)."""
     return SQLAlchemySanctionedEntityRepository(db)
 
 def get_change_event_repository(
     db: Session = Depends(get_db)
-) -> ChangeEventRepository:
-    """Get change event repository instance."""
+) -> SQLAlchemyChangeEventRepository:
+    """Get change event repository instance for v1 API (sync)."""
     return SQLAlchemyChangeEventRepository(db)
 
 def get_scraper_run_repository(
     db: Session = Depends(get_db)
-) -> ScraperRunRepository:
-    """Get scraper run repository instance."""
+) -> SQLAlchemyScraperRunRepository:
+    """Get scraper run repository instance for v1 API (sync)."""
     return SQLAlchemyScraperRunRepository(db)
 
 def get_content_snapshot_repository(
     db: Session = Depends(get_db)
-) -> ContentSnapshotRepository:
-    """Get content snapshot repository instance."""
+) -> SQLAlchemyContentSnapshotRepository:
+    """Get content snapshot repository instance for v1 API (sync)."""
+    return SQLAlchemyContentSnapshotRepository(db)
+
+# ======================== V2 ASYNC REPOSITORY DEPENDENCIES ========================
+
+async def get_async_sanctioned_entity_repository(
+    db: AsyncSession = Depends(get_async_db)
+) -> SQLAlchemySanctionedEntityRepository:
+    """Get sanctioned entity repository instance for v2 API (async)."""
+    # Same class, but initialized with AsyncSession
+    return SQLAlchemySanctionedEntityRepository(db)
+
+async def get_async_change_event_repository(
+    db: AsyncSession = Depends(get_async_db)
+) -> SQLAlchemyChangeEventRepository:
+    """Get change event repository instance for v2 API (async)."""
+    # Same class, but initialized with AsyncSession
+    return SQLAlchemyChangeEventRepository(db)
+
+async def get_async_scraper_run_repository(
+    db: AsyncSession = Depends(get_async_db)
+) -> SQLAlchemyScraperRunRepository:
+    """Get scraper run repository instance for v2 API (async)."""
+    # Same class, but initialized with AsyncSession
+    return SQLAlchemyScraperRunRepository(db)
+
+async def get_async_content_snapshot_repository(
+    db: AsyncSession = Depends(get_async_db)
+) -> SQLAlchemyContentSnapshotRepository:
+    """Get content snapshot repository instance for v2 API (async)."""
+    # Same class, but initialized with AsyncSession
     return SQLAlchemyContentSnapshotRepository(db)
 
 # ======================== UNIT OF WORK DEPENDENCIES ========================
@@ -118,10 +150,10 @@ def get_business_operations(
 
 # ======================== HEALTH CHECK DEPENDENCIES ========================
 
-async def get_system_health() -> Dict[str, Any]:  # FIXED: Now Dict is imported
+async def get_system_health() -> Dict[str, Any]:
     """Get comprehensive system health check."""
     health_status = {
-        'timestamp': datetime.utcnow().isoformat(),  # FIXED: Now datetime is imported
+        'timestamp': datetime.utcnow().isoformat(),
         'overall_healthy': True,
         'components': {}
     }
@@ -146,9 +178,6 @@ async def get_system_health() -> Dict[str, Any]:  # FIXED: Now Dict is imported
             'error': str(e),
             'components': {}
         }
-
-# REST OF THE FILE REMAINS THE SAME...
-# (I'm only showing the fixed parts to save space)
 
 # ======================== DEPENDENCY CONTAINER CLASS ========================
 
@@ -181,6 +210,44 @@ class DependencyContainer:
         except Exception as e:
             handle_exception(e, self.logger, context={"operation": "container_initialization"})
             raise
+    
+    def get_uow_factory(self):
+        """Get UoW factory."""
+        if not self._initialized:
+            self.initialize()
+        return self._uow_factory
 
 # Global container instance
 container = DependencyContainer()
+
+# ======================== EXPORTS ========================
+
+__all__ = [
+    # Sync repositories (v1)
+    'get_sanctioned_entity_repository',
+    'get_change_event_repository',
+    'get_scraper_run_repository',
+    'get_content_snapshot_repository',
+    
+    # Async repositories (v2)
+    'get_async_sanctioned_entity_repository',
+    'get_async_change_event_repository',
+    'get_async_scraper_run_repository',
+    'get_async_content_snapshot_repository',
+    
+    # Services
+    'get_change_detection_service',
+    'get_scraping_service',
+    'get_notification_service',
+    'get_business_operations',
+    
+    # UoW
+    'get_unit_of_work_factory',
+    'get_unit_of_work',
+    
+    # Health
+    'get_system_health',
+    
+    # Container
+    'container'
+]
