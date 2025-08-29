@@ -9,12 +9,12 @@ Production-grade change detection for sanctions data with:
 - audit trail
 """
 
-from src.services.change_detection.download_manager import DownloadManager, DownloadResult
-from src.services.change_detection.change_detector import ChangeDetector, EntityChange
+from src.services.change_detection.download_manager import AsyncDownloadManager, DownloadResult
+from src.services.change_detection.change_detector import AsyncChangeDetector, EntityChange
 
 __all__ = [
-    'DownloadManager',
+    'AsyncDownloadManager',
     'DownloadResult', 
-    'ChangeDetector',
+    'AsyncChangeDetector',
     'EntityChange'
 ]
