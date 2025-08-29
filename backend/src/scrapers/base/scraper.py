@@ -1,5 +1,5 @@
 """
-Abstract base scraper framework for all sanctions sources.
+Abstract base scraper framework for all sanctions sources - ASYNC VERSION.
 Implements common patterns: download, parse, validate, store.
 """
 
@@ -26,46 +26,46 @@ class ScrapingResult:
 # ======================== BASE SCRAPER CLASS ========================
 
 class BaseScraper(ABC):
-    """Abstract base class for all sanctions scrapers."""
+    """Abstract base class for all sanctions scrapers - ASYNC VERSION."""
     
     def __init__(self, source_name: str):
         self.source_name = source_name
         self.logger = logging.getLogger(f"scraper.{source_name}")
     
-    # ======================== ABSTRACT METHODS ========================
+    # ======================== ABSTRACT METHODS (NOW ASYNC) ========================
     
     @abstractmethod
-    def download_data(self) -> str:
+    async def download_data(self) -> str:
         """Download raw data from source."""
         pass
     
     @abstractmethod
-    def parse_entities(self, raw_data: str) -> List[Any]:
+    async def parse_entities(self, raw_data: str) -> List[Any]:
         """Parse raw data into structured entities."""
         pass
     
     @abstractmethod
-    def store_entities(self, entities: List[Any]) -> None:
+    async def store_entities(self, entities: List[Any]) -> None:
         """Store entities in database."""
         pass
     
-    # ======================== MAIN WORKFLOW ========================
+    # ======================== MAIN WORKFLOW (NOW ASYNC) ========================
     
-    def scrape_and_store(self) -> ScrapingResult:
-        """Main scraping workflow with error handling."""
+    async def scrape_and_store(self) -> ScrapingResult:
+        """Main scraping workflow with error handling - ASYNC VERSION."""
         start_time = datetime.utcnow()
         
         try:
             self.logger.info(f"Starting scraping for {self.source_name}")
             
             # Download raw data
-            raw_data = self.download_data()
+            raw_data = await self.download_data()
             
             # Parse into structured entities
-            entities = self.parse_entities(raw_data)
+            entities = await self.parse_entities(raw_data)
             
             # Store in database
-            self.store_entities(entities)
+            await self.store_entities(entities)
             
             # Calculate duration
             duration = (datetime.utcnow() - start_time).total_seconds()
