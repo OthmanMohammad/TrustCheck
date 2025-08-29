@@ -1,5 +1,5 @@
 """
-Updated API Endpoints - FIXED Empty Response Bug
+Fixed API Endpoints - Properly calls sync methods on repositories
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -35,7 +35,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["TrustCheck API v1"])
 
-# ======================== FIXED ENTITY ENDPOINTS ========================
+# ======================== ENTITY ENDPOINTS ========================
 
 @router.get("/entities")
 async def list_entities(
@@ -48,7 +48,8 @@ async def list_entities(
     entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
 ):
     """
-    List sanctioned entities with filtering and pagination - FIXED.
+    List sanctioned entities with filtering and pagination.
+    FIXED: Calls sync methods directly without await
     """
     start_time = datetime.utcnow()
     
@@ -65,34 +66,51 @@ async def list_entities(
                 }
             )
             
-            # FIXED: Properly handle different filter combinations
+            # FIXED: Check if this is the actual sync repository
+            # If the repository has explicit sync methods, use those
             entities = []
             
             if source:
-                # Filter by source
-                entities = await entity_repo.find_by_source(
-                    source=source,
-                    active_only=active_only,
-                    limit=limit,
-                    offset=offset
-                )
+                # Check for explicit sync method
+                if hasattr(entity_repo, 'find_by_source') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'find_by_source')):
+                    entities = entity_repo.find_by_source(
+                        source=source,
+                        active_only=active_only,
+                        limit=limit,
+                        offset=offset
+                    )
+                else:
+                    # This shouldn't happen if repos are set up correctly
+                    logger.error("Repository missing sync method find_by_source")
+                    entities = []
+                    
             elif entity_type:
-                # Filter by entity type
-                entities = await entity_repo.find_by_entity_type(
-                    entity_type=entity_type,
-                    limit=limit,
-                    offset=offset
-                )
+                if hasattr(entity_repo, 'find_by_entity_type') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'find_by_entity_type')):
+                    entities = entity_repo.find_by_entity_type(
+                        entity_type=entity_type,
+                        limit=limit,
+                        offset=offset
+                    )
+                else:
+                    logger.error("Repository missing sync method find_by_entity_type")
+                    entities = []
+                    
             else:
-                # FIXED: Get all entities when no filters provided
-                entities = await entity_repo.find_all(
-                    active_only=active_only,
-                    limit=limit,
-                    offset=offset
-                )
+                # Get all entities - use the sync version
+                if hasattr(entity_repo, 'find_all') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'find_all')):
+                    entities = entity_repo.find_all(
+                        active_only=active_only,
+                        limit=limit,
+                        offset=offset
+                    )
+                else:
+                    logger.error("Repository missing sync method find_all")
+                    entities = []
             
-            # Also get statistics for the response
-            stats = await entity_repo.get_statistics()
+            # Get statistics - sync method
+            stats = {}
+            if hasattr(entity_repo, 'get_statistics') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'get_statistics')):
+                stats = entity_repo.get_statistics()
             
             # Convert domain entities to API response format
             entity_results = []
@@ -113,7 +131,7 @@ async def list_entities(
                     }
                     entity_results.append(entity_dict)
                 except Exception as e:
-                    logger.warning(f"Error converting entity {entity.uid}: {e}")
+                    logger.warning(f"Error converting entity: {e}")
                     continue
             
             duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -122,8 +140,7 @@ async def list_entities(
                 "list_entities",
                 duration_ms,
                 success=True,
-                results_count=len(entity_results),
-                source=source.value if source else None
+                results_count=len(entity_results)
             )
             
             return {
@@ -150,14 +167,144 @@ async def list_entities(
                 }
             }
             
-    except TrustCheckError as e:
-        logger.error(f"Business error in list_entities: {e}")
-        raise HTTPException(status_code=400, detail=create_error_response(e))
     except Exception as e:
-        logger.error(f"Unexpected error in list_entities: {e}", exc_info=True)
+        logger.error(f"Error in list_entities: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ======================== FIXED CHANGE DETECTION ENDPOINTS ========================
+@router.get("/entities/search")
+async def search_entities(
+    request: Request,
+    name: str = Query(..., description="Name to search for"),
+    fuzzy: bool = Query(False, description="Use fuzzy matching"),
+    limit: int = Query(20, ge=1, le=100),
+    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
+):
+    """Search entities by name."""
+    try:
+        # FIXED: Call sync method directly
+        entities = []
+        if hasattr(entity_repo, 'search_by_name') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'search_by_name')):
+            entities = entity_repo.search_by_name(name, fuzzy=fuzzy, limit=limit)
+        
+        # Convert to response format
+        results = []
+        for entity in entities:
+            results.append({
+                "uid": entity.uid,
+                "name": entity.name,
+                "type": entity.entity_type.value,
+                "source": entity.source.value,
+                "programs": entity.programs,
+                "match_score": 1.0
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "query": name,
+                "results": results,
+                "count": len(results)
+            },
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error searching entities: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/entities/{uid}")
+async def get_entity_by_uid(
+    uid: str,
+    request: Request,
+    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
+):
+    """Get entity by UID."""
+    try:
+        # FIXED: Call sync method directly
+        entity = None
+        if hasattr(entity_repo, 'get_by_uid') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'get_by_uid')):
+            entity = entity_repo.get_by_uid(uid)
+        
+        if not entity:
+            raise HTTPException(status_code=404, detail=f"Entity {uid} not found")
+        
+        # Convert to response format
+        entity_dict = {
+            "uid": entity.uid,
+            "name": entity.name,
+            "type": entity.entity_type.value,
+            "source": entity.source.value,
+            "programs": entity.programs,
+            "aliases": entity.aliases,
+            "addresses": [str(addr) for addr in entity.addresses] if entity.addresses else [],
+            "nationalities": entity.nationalities,
+            "is_active": entity.is_active,
+            "last_updated": entity.updated_at.isoformat() if entity.updated_at else None,
+            "is_high_risk": entity.is_high_risk
+        }
+        
+        return {
+            "success": True,
+            "data": entity_dict,
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting entity {uid}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/statistics")
+async def get_statistics(
+    request: Request,
+    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository),
+    change_detection_service: ChangeDetectionService = Depends(get_change_detection_service)
+):
+    """Get comprehensive statistics."""
+    try:
+        # FIXED: Call sync method for entity stats
+        entity_stats = {}
+        if hasattr(entity_repo, 'get_statistics') and not asyncio.iscoroutinefunction(getattr(entity_repo, 'get_statistics')):
+            entity_stats = entity_repo.get_statistics()
+        
+        # Service methods may be async
+        change_summary = await change_detection_service.get_change_summary(days=7)
+        
+        return {
+            "success": True,
+            "data": {
+                "entities": entity_stats,
+                "changes": change_summary
+            },
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting statistics: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": {
+                "code": "UNEXPECTED_ERROR",
+                "message": f"Unexpected error: [{type(e).__name__}] {str(e)}"
+            },
+            "metadata": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": getattr(request.state, 'request_id', None)
+            }
+        }
+
+# ======================== CHANGE DETECTION ENDPOINTS ========================
+# These use services which handle async/sync properly
 
 @router.get("/changes")
 async def list_changes(
@@ -172,14 +319,13 @@ async def list_changes(
     """List recent changes with filtering."""
     
     try:
-        # Get change summary
+        # Services handle async properly
         summary = await change_detection_service.get_change_summary(
             days=days,
             source=source,
             risk_level=risk_level
         )
         
-        # Get critical changes if needed
         critical_changes = []
         if not risk_level or risk_level == RiskLevel.CRITICAL:
             critical_changes = await change_detection_service.get_critical_changes(
@@ -187,7 +333,7 @@ async def list_changes(
                 source=source
             )
         
-        # Format response - FIXED: Handle None values properly
+        # Format response
         critical_changes_formatted = []
         for change in critical_changes[:10]:
             try:
@@ -228,25 +374,23 @@ async def get_critical_changes(
     source: Optional[DataSource] = Query(None, description="Filter by source"),
     change_detection_service: ChangeDetectionService = Depends(get_change_detection_service)
 ):
-    """Get critical changes requiring immediate attention - FIXED."""
+    """Get critical changes requiring immediate attention."""
     
     try:
         with LoggingContext(request_id=getattr(request.state, 'request_id', str(uuid.uuid4()))):
-            # FIXED: Properly await async method
+            # Service handles async properly
             critical_changes = await change_detection_service.get_critical_changes(
                 hours=hours,
                 source=source
             )
             
-            # FIXED: Ensure we always have a list
             if not critical_changes:
                 critical_changes = []
             
-            # Format changes for response - FIXED: Handle empty results
+            # Format changes for response
             formatted_changes = []
             for change in critical_changes:
                 try:
-                    # FIXED: Check for None values before accessing attributes
                     if not change:
                         continue
                         
@@ -294,125 +438,6 @@ async def get_critical_changes(
     except Exception as e:
         logger.error(f"Error getting critical changes: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-    
-@router.get("/entities/search")
-async def search_entities(
-    request: Request,
-    name: str = Query(..., description="Name to search for"),
-    fuzzy: bool = Query(False, description="Use fuzzy matching"),
-    limit: int = Query(20, ge=1, le=100),
-    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
-):
-    """Search entities by name."""
-    try:
-        entities = await entity_repo.search_by_name(name, fuzzy=fuzzy, limit=limit)
-        
-        # Convert to response format
-        results = []
-        for entity in entities:
-            results.append({
-                "uid": entity.uid,
-                "name": entity.name,
-                "type": entity.entity_type.value,
-                "source": entity.source.value,
-                "programs": entity.programs,
-                "match_score": 1.0  # Would be calculated in fuzzy search
-            })
-        
-        return {
-            "success": True,
-            "data": {
-                "query": name,
-                "results": results,
-                "count": len(results)
-            },
-            "metadata": {
-                "timestamp": datetime.utcnow().isoformat(),
-                "request_id": getattr(request.state, 'request_id', None)
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error searching entities: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-    
-@router.get("/entities/{uid}")
-async def get_entity_by_uid(
-    uid: str,
-    request: Request,
-    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository)
-):
-    """Get entity by UID."""
-    try:
-        entity = await entity_repo.get_by_uid(uid)
-        
-        if not entity:
-            raise HTTPException(status_code=404, detail=f"Entity {uid} not found")
-        
-        # Convert to response format
-        entity_dict = {
-            "uid": entity.uid,
-            "name": entity.name,
-            "type": entity.entity_type.value,
-            "source": entity.source.value,
-            "programs": entity.programs,
-            "aliases": entity.aliases,
-            "addresses": [str(addr) for addr in entity.addresses] if entity.addresses else [],
-            "nationalities": entity.nationalities,
-            "is_active": entity.is_active,
-            "last_updated": entity.updated_at.isoformat() if entity.updated_at else None,
-            "is_high_risk": entity.is_high_risk
-        }
-        
-        return {
-            "success": True,
-            "data": entity_dict,
-            "metadata": {
-                "timestamp": datetime.utcnow().isoformat(),
-                "request_id": getattr(request.state, 'request_id', None)
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting entity {uid}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-
-@router.get("/statistics")
-async def get_statistics(
-    request: Request,
-    entity_repo: SanctionedEntityRepository = Depends(get_sanctioned_entity_repository),
-    change_detection_service: ChangeDetectionService = Depends(get_change_detection_service)
-):
-    """Get comprehensive statistics."""
-    try:
-        # Get entity statistics
-        entity_stats = await entity_repo.get_statistics()
-        
-        # Get change statistics
-        change_summary = await change_detection_service.get_change_summary(days=7)
-        
-        return {
-            "success": True,
-            "data": {
-                "entities": entity_stats,
-                "changes": change_summary
-            },
-            "metadata": {
-                "timestamp": datetime.utcnow().isoformat(),
-                "request_id": getattr(request.state, 'request_id', None)
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting statistics: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/scraping/status")
 async def get_scraping_status(
@@ -440,5 +465,8 @@ async def get_scraping_status(
     except Exception as e:
         logger.error(f"Error getting scraping status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+# Add asyncio import at the top
+import asyncio
 
 __all__ = ['router']
