@@ -18,13 +18,36 @@ docker-compose build
 echo "Starting services..."
 docker-compose up -d
 
-# Wait for database to be ready
-echo "Waiting for database..."
-sleep 10
+# Wait for database using proper health check
+echo "Waiting for database to be ready..."
+MAX_TRIES=30
+TRIES=0
+while [ $TRIES -lt $MAX_TRIES ]; do
+    if docker-compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1; then
+        echo "Database is ready!"
+        break
+    fi
+    TRIES=$((TRIES + 1))
+    if [ $TRIES -eq $MAX_TRIES ]; then
+        echo "Error: Database failed to start after $MAX_TRIES attempts"
+        docker-compose logs postgres
+        exit 1
+    fi
+    echo "Waiting for database... (attempt $TRIES/$MAX_TRIES)"
+    sleep 2
+done
 
-# Run migrations
+# Run migrations with proper error handling
 echo "Running database migrations..."
-docker-compose exec -T web alembic upgrade head 2>/dev/null || echo "Migrations already up to date"
+if docker-compose exec -T web alembic upgrade head; then
+    echo "✅ Migrations completed successfully"
+else
+    echo "❌ Migration failed! Check logs below:"
+    docker-compose logs web
+    echo "Stopping services due to migration failure..."
+    docker-compose down
+    exit 1
+fi
 
 # Check service health
 echo ""
@@ -32,6 +55,22 @@ echo "======================================"
 echo "Service Status:"
 echo "======================================"
 docker-compose ps
+
+# Verify API is responding
+echo "Checking API health..."
+MAX_TRIES=10
+TRIES=0
+while [ $TRIES -lt $MAX_TRIES ]; do
+    if curl -f http://localhost:8000/health > /dev/null 2>&1; then
+        echo "✅ API is healthy!"
+        break
+    fi
+    TRIES=$((TRIES + 1))
+    if [ $TRIES -eq $MAX_TRIES ]; then
+        echo "⚠️  API health check failed after $MAX_TRIES attempts"
+    fi
+    sleep 2
+done
 
 echo ""
 echo "======================================"
