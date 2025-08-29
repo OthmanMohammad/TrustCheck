@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 import asyncio
 
 # Core domain imports (no infrastructure dependencies)
-from src.core.uow import UnitOfWork
 from src.core.domain.entities import (
     SanctionedEntityDomain, ChangeEventDomain, ScraperRunDomain,
     ChangeDetectionResult, ScrapingRequest, create_sanctioned_entity,
@@ -22,9 +21,6 @@ from src.core.exceptions import (
     ValidationError, handle_exception
 )
 from src.core.logging_config import get_logger, log_exception, log_performance
-
-# Infrastructure interfaces (not implementations)
-from src.infrastructure.database.uow import SQLAlchemyUnitOfWorkFactory
 
 logger = get_logger(__name__)
 
@@ -38,7 +34,8 @@ class ChangeDetectionService:
     Contains all business logic for detecting and classifying changes.
     """
     
-    def __init__(self, uow_factory: SQLAlchemyUnitOfWorkFactory):
+    def __init__(self, uow_factory):
+        """Initialize with UoW factory from dependency injection."""
         self.uow_factory = uow_factory
         self.logger = get_logger(__name__)
     
@@ -66,6 +63,7 @@ class ChangeDetectionService:
         start_time = datetime.utcnow()
         
         try:
+            # Use the UoW factory's async context manager properly
             async with self.uow_factory.create_async_unit_of_work() as uow:
                 self.logger.info(
                     f"Starting change detection for {source.value}",
@@ -146,7 +144,7 @@ class ChangeDetectionService:
                     risk_level=risk_level
                 )
                 
-                # FIXED: Handle None/empty results
+                # Handle None/empty results
                 if not changes:
                     changes = []
                 
@@ -156,7 +154,7 @@ class ChangeDetectionService:
                     source=source
                 )
                 
-                # FIXED: Ensure risk_counts is never None
+                # Ensure risk_counts is never None
                 if not risk_counts:
                     risk_counts = {}
                 
@@ -166,7 +164,7 @@ class ChangeDetectionService:
                     source=source
                 )
                 
-                # FIXED: Ensure type_counts is never None
+                # Ensure type_counts is never None
                 if not type_counts:
                     type_counts = {}
                 
@@ -203,11 +201,11 @@ class ChangeDetectionService:
                 
         except Exception as e:
             self.logger.error(f"Failed to get change summary: {e}", exc_info=True)
-            # FIXED: Return empty summary structure on error
+            # Return empty summary structure on error
             return {
                 'period': {
                     'days': days,
-                    'start_date': datetime.utcnow().isoformat(),
+                    'start_date': (datetime.utcnow() - timedelta(days=days)).isoformat(),
                     'end_date': datetime.utcnow().isoformat()
                 },
                 'filters': {
@@ -252,7 +250,7 @@ class ChangeDetectionService:
                         if change.source == source
                     ]
                 
-                # FIXED: Always return a list, even if empty
+                # Always return a list, even if empty
                 if not critical_changes:
                     critical_changes = []
                 
@@ -269,7 +267,7 @@ class ChangeDetectionService:
                 
         except Exception as e:
             self.logger.error(f"Failed to get critical changes: {e}", exc_info=True)
-            # FIXED: Return empty list on error instead of raising
+            # Return empty list on error instead of raising
             return []
     
     # ======================== PRIVATE HELPER METHODS ========================
