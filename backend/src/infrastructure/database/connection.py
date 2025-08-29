@@ -1,5 +1,5 @@
 """
-Database Connection - Async Only Version
+Database Connection - Fully Async
 """
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
@@ -14,7 +14,7 @@ from src.core.config import settings
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Async-only database manager."""
+    """Fully async database manager."""
     
     def __init__(self):
         self.engine = None
