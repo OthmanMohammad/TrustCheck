@@ -533,28 +533,37 @@ async def get_change_summary(
 @router.post(
     "/scraping/run",
     response_model=ScraperRunResponse,
-    summary="Start scraper run",
+    summary="Start scraper run via Celery",
     status_code=status.HTTP_202_ACCEPTED
 )
 async def start_scraper_run(
     request: Request,
-    run_request: ScraperRunRequest = Body(...),
-    # Temporarily comment out until service is ready
-    # scraping_service: ScrapingOrchestrationService = Depends(get_scraping_service)
+    run_request: ScraperRunRequest = Body(...)
 ) -> ScraperRunResponse:
-    """Start a scraper run with validated input."""
+    """
+    Start a scraper run using Celery task queue.
     
+    Returns immediately with task ID while scraping runs in background.
+    """
     request_id = getattr(request.state, 'request_id', str(uuid.uuid4()))
     
     try:
-        # TODO: Implement actual scraping service
-        # For now, return a mock response
-        from uuid import uuid4
+        # Import Celery task
+        from src.tasks.scraping_tasks import run_scraper_task
         
+        # Queue the task
+        task = run_scraper_task.apply_async(
+            args=[run_request.source.value],
+            kwargs={'force_update': run_request.force_update},
+            queue='scraping',
+            priority=9
+        )
+        
+        # Create response
         run_dto = ScraperRunDetailDTO(
-            run_id=f"{run_request.source.value}_{uuid4().hex[:8]}",
+            run_id=task.id,
             source=run_request.source,
-            status="ACCEPTED",  # Changed from RUNNING to ACCEPTED
+            status="QUEUED",
             started_at=datetime.utcnow(),
             entities_processed=0,
             entities_added=0,
@@ -566,7 +575,7 @@ async def start_scraper_run(
             low_risk_changes=0
         )
         
-        logger.info(f"Scraper run accepted: {run_dto.run_id}")
+        logger.info(f"Scraper task queued: {task.id} for {run_request.source.value}")
         
         return ScraperRunResponse(
             success=True,
@@ -574,27 +583,50 @@ async def start_scraper_run(
             metadata={
                 "timestamp": datetime.utcnow(),
                 "request_id": request_id,
-                "message": "Scraping job accepted and queued"
+                "task_id": task.id,
+                "message": "Scraping job queued successfully"
             }
         )
         
-    except PydanticValidationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"detail": e.errors()}
-        )
     except Exception as e:
-        logger.error(f"Error starting scraper run: {e}", exc_info=True)
+        logger.error(f"Error queuing scraper run: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=ErrorResponse(
                 error=ErrorDetail(
-                    code="SCRAPING_ERROR",
-                    message="Failed to start scraper run",
+                    code="SCRAPING_QUEUE_ERROR",
+                    message="Failed to queue scraper run",
                     context={"source": run_request.source.value, "error": str(e)}
                 ),
                 metadata={"timestamp": datetime.utcnow(), "request_id": request_id}
             ).model_dump()
+        )
+
+@router.get(
+    "/scraping/task/{task_id}",
+    summary="Get Celery task status"
+)
+async def get_task_status(
+    task_id: str = Path(..., description="Celery task ID"),
+    request: Request = None
+):
+    """Get status of a Celery task."""
+    from src.celery_app import app
+    
+    try:
+        task = app.AsyncResult(task_id)
+        
+        return {
+            "task_id": task_id,
+            "status": task.status,
+            "result": task.result if task.successful() else None,
+            "error": str(task.info) if task.failed() else None,
+            "ready": task.ready()
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)}
         )
 
 @router.get(
