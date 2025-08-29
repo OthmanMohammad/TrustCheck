@@ -234,6 +234,7 @@ async def _run_scraper_async(
                 await session.commit()
         raise
 
+
 @shared_task(name='src.tasks.scraping_tasks.scrape_all_sources_task')
 def scrape_all_sources_task() -> Dict[str, Any]:
     """
@@ -244,6 +245,14 @@ def scrape_all_sources_task() -> Dict[str, Any]:
     
     for source in sources:
         try:
+            # Handle both OFAC and UN scrapers
+            if source == 'OFAC':
+                scraper_name = 'us_ofac'
+            elif source == 'UN':
+                scraper_name = 'un'
+            else:
+                scraper_name = source.lower()
+            
             # Use apply_async to run in parallel with different queues
             result = run_scraper_task.apply_async(
                 args=[source],
