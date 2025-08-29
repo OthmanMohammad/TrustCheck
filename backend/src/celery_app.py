@@ -1,31 +1,20 @@
 """
-Production Celery Application with comprehensive configuration.
+Production Celery Application.
 """
-
 from celery import Celery, Task
-from celery.signals import (
-    setup_logging, worker_ready, worker_shutdown,
-    task_prerun, task_postrun, task_failure, task_retry
-)
-from typing import Any, Dict
+from celery.signals import setup_logging, worker_ready, worker_shutdown, task_prerun, task_postrun, task_failure
 import logging
 import asyncio
 from datetime import datetime
+from typing import Any
 
-from src.core.config import settings
+from src.core.celery_config import CeleryConfig
 from src.core.logging_config import get_logger
-
-# Remove this line - it's not needed
-# os.environ.setdefault('CELERY_CONFIG_MODULE', 'src.celery_config')
 
 logger = get_logger(__name__)
 
-# ======================== CUSTOM TASK CLASS ========================
-
 class AsyncTask(Task):
-    """
-    Custom task class with async support and enhanced error handling.
-    """
+    """Custom task class with async support."""
     
     def __init__(self):
         self._async_loop = None
@@ -44,7 +33,6 @@ class AsyncTask(Task):
     def __call__(self, *args, **kwargs):
         """Execute task with async support."""
         try:
-            # Check if task is async
             if asyncio.iscoroutinefunction(self.run):
                 return self.loop.run_until_complete(
                     self.run(*args, **kwargs)
@@ -65,21 +53,19 @@ class AsyncTask(Task):
             raise
     
     def on_failure(self, exc, task_id, args, kwargs, einfo):
-        """Handle task failure with comprehensive logging."""
+        """Handle task failure."""
         logger.error(
             f"Task failed: {self.name}",
             extra={
                 "task_id": task_id,
                 "task_name": self.name,
                 "exception": str(exc),
-                "args": args,
-                "kwargs": kwargs,
                 "traceback": str(einfo)
             }
         )
     
     def on_retry(self, exc, task_id, args, kwargs, einfo):
-        """Handle task retry with logging."""
+        """Handle task retry."""
         logger.warning(
             f"Task retrying: {self.name}",
             extra={
@@ -91,7 +77,7 @@ class AsyncTask(Task):
         )
     
     def on_success(self, retval, task_id, args, kwargs):
-        """Handle task success with metrics."""
+        """Handle task success."""
         logger.info(
             f"Task completed: {self.name}",
             extra={
@@ -101,14 +87,9 @@ class AsyncTask(Task):
             }
         )
 
-# ======================== CREATE CELERY APP ========================
-
 def create_celery_app() -> Celery:
-    """
-    Create and configure Celery application.
-    """
+    """Create and configure Celery application."""
     
-    # Create Celery instance
     app = Celery(
         'trustcheck',
         task_cls=AsyncTask,
@@ -120,38 +101,19 @@ def create_celery_app() -> Celery:
         ]
     )
     
-    # Load configuration from settings - FIX: use get_celery_config() method
-    app.config_from_object(settings.celery.get_celery_config())
+    # Load configuration from CeleryConfig class
+    app.config_from_object(CeleryConfig)
     
-    # Additional production configurations
+    # Additional settings
     app.conf.update(
-        # Task execution
-        task_track_started=True,
-        task_send_sent_event=True,
-        
-        # Worker configuration
-        worker_send_task_events=True,
-        worker_disable_rate_limits=False,
-        
-        # Security
-        worker_hijack_root_logger=False,
-        
-        # Monitoring
-        worker_log_format='[%(asctime)s: %(levelname)s/%(processName)s] %(message)s',
-        worker_task_log_format='[%(asctime)s: %(levelname)s/%(processName)s][%(task_name)s(%(task_id)s)] %(message)s',
-        
-        # Error handling
-        task_eager_propagates=True,
-        task_ignore_result=False,
-        
-        # Performance
         broker_connection_retry_on_startup=True,
         broker_pool_limit=10,
         result_backend_pool_limit=10,
-        
-        # Compression
         task_compression='gzip',
-        result_compression='gzip'
+        result_compression='gzip',
+        worker_hijack_root_logger=False,
+        worker_log_format='[%(asctime)s: %(levelname)s/%(processName)s] %(message)s',
+        worker_task_log_format='[%(asctime)s: %(levelname)s/%(processName)s][%(task_name)s(%(task_id)s)] %(message)s',
     )
     
     return app
@@ -159,13 +121,11 @@ def create_celery_app() -> Celery:
 # Create the Celery app instance
 app = create_celery_app()
 
-# ======================== SIGNAL HANDLERS ========================
-
+# Signal handlers
 @setup_logging.connect
 def configure_logging(**kwargs):
-    """Configure Celery logging to use our logging config."""
-    # Don't override our logging config
-    pass
+    """Configure logging."""
+    pass  # Use our custom logging
 
 @worker_ready.connect
 def worker_ready_handler(sender=None, **kwargs):
@@ -203,7 +163,7 @@ def task_postrun_handler(sender=None, task_id=None, task=None, **kwargs):
 
 @task_failure.connect
 def task_failure_handler(sender=None, task_id=None, exception=None, **kwargs):
-    """Handle task failures for monitoring."""
+    """Handle task failures."""
     logger.error(
         f"Task failed: {task_id}",
         extra={
@@ -212,63 +172,5 @@ def task_failure_handler(sender=None, task_id=None, exception=None, **kwargs):
             "task_name": sender.name if sender else "unknown"
         }
     )
-
-# ======================== SCHEDULED TASKS CONFIGURATION ========================
-
-from celery.schedules import crontab
-
-app.conf.beat_schedule = {
-    # Scraping tasks
-    'scrape-ofac-every-6-hours': {
-        'task': 'src.tasks.scraping_tasks.run_scraper_task',
-        'schedule': crontab(minute=0, hour='*/6'),  # Every 6 hours
-        'args': ('OFAC',),
-        'options': {
-            'queue': 'scraping',
-            'priority': 9
-        }
-    },
-    
-    'scrape-un-daily': {
-        'task': 'src.tasks.scraping_tasks.run_scraper_task',
-        'schedule': crontab(minute=0, hour=2),  # Daily at 2 AM
-        'args': ('UN',),
-        'options': {
-            'queue': 'scraping',
-            'priority': 8
-        }
-    },
-    
-    # Notification tasks
-    'send-daily-digest': {
-        'task': 'src.tasks.notification_tasks.send_daily_digest_task',
-        'schedule': crontab(minute=0, hour=9),  # Daily at 9 AM
-        'options': {
-            'queue': 'notifications',
-            'priority': 5
-        }
-    },
-    
-    # Maintenance tasks
-    'cleanup-old-data': {
-        'task': 'src.tasks.maintenance_tasks.cleanup_old_data_task',
-        'schedule': crontab(minute=0, hour=4),  # Daily at 4 AM
-        'options': {
-            'queue': 'maintenance',
-            'priority': 1
-        }
-    },
-    
-    'health-check': {
-        'task': 'src.tasks.maintenance_tasks.health_check_task',
-        'schedule': crontab(minute='*/5'),  # Every 5 minutes
-        'options': {
-            'queue': 'maintenance',
-            'priority': 10
-        }
-    }
-}
-
-# ======================== EXPORTS ========================
 
 __all__ = ['app', 'AsyncTask']
