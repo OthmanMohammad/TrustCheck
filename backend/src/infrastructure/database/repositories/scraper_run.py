@@ -1,25 +1,22 @@
 """
-Simple Scraper Run Repository - Just Sync Methods
+Scraper Run Repository - Async Implementation
 """
-
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, and_, desc, func
 
 from src.core.domain.entities import ScraperRunDomain
-from src.core.domain.repositories import ScraperRunRepository
 from src.core.enums import DataSource, ScrapingStatus
-from src.core.exceptions import DatabaseError
 from src.infrastructure.database.models import ScraperRun as ScraperRunORM
 from src.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 class SQLAlchemyScraperRunRepository:
-    """Simple sync-only repository."""
+    """Async repository for scraper runs."""
     
-    def __init__(self, session: Session):
+    def __init__(self, session: AsyncSession):
         self.session = session
         self.logger = get_logger(__name__)
     
@@ -34,117 +31,148 @@ class SQLAlchemyScraperRunRepository:
             source = DataSource.OFAC
         
         try:
-            status = ScrapingStatus(orm_run.status) if orm_run.status else ScrapingStatus.PENDING
+            status = ScrapingStatus(orm_run.status) if orm_run.status else ScrapingStatus.RUNNING
         except:
-            status = ScrapingStatus.PENDING
+            status = ScrapingStatus.RUNNING
         
         return ScraperRunDomain(
             run_id=orm_run.run_id,
             source=source,
-            status=status,
             started_at=orm_run.started_at,
             completed_at=orm_run.completed_at,
-            entities_found=orm_run.entities_found or 0,
-            entities_added=orm_run.entities_added or 0,
-            entities_updated=orm_run.entities_updated or 0,
-            entities_deactivated=orm_run.entities_deactivated or 0,
-            changes_detected=orm_run.changes_detected or 0,
-            errors=orm_run.errors or [],
-            processing_time_ms=orm_run.processing_time_ms,
-            memory_usage_mb=orm_run.memory_usage_mb,
-            metadata=orm_run.metadata or {}
+            status=status,
+            source_url=orm_run.source_url,
+            content_hash=orm_run.content_hash,
+            content_size_bytes=orm_run.content_size_bytes,
+            content_changed=orm_run.content_changed,
+            entities_processed=orm_run.entities_processed,
+            entities_added=orm_run.entities_added,
+            entities_modified=orm_run.entities_modified,
+            entities_removed=orm_run.entities_removed,
+            critical_changes=orm_run.critical_changes,
+            high_risk_changes=orm_run.high_risk_changes,
+            medium_risk_changes=orm_run.medium_risk_changes,
+            low_risk_changes=orm_run.low_risk_changes,
+            download_time_ms=orm_run.download_time_ms,
+            parsing_time_ms=orm_run.parsing_time_ms,
+            diff_time_ms=orm_run.diff_time_ms,
+            storage_time_ms=orm_run.storage_time_ms,
+            error_message=orm_run.error_message,
+            retry_count=orm_run.retry_count
         )
     
-    def get_by_run_id(self, run_id: str) -> Optional[ScraperRunDomain]:
+    async def create(self, scraper_run: ScraperRunDomain) -> ScraperRunDomain:
+        """Create new scraper run."""
+        orm_run = ScraperRunORM(
+            run_id=scraper_run.run_id,
+            source=scraper_run.source.value,
+            started_at=scraper_run.started_at,
+            status=scraper_run.status.value,
+            source_url=scraper_run.source_url
+        )
+        
+        self.session.add(orm_run)
+        await self.session.flush()
+        return scraper_run
+    
+    async def update(self, scraper_run: ScraperRunDomain) -> ScraperRunDomain:
+        """Update scraper run."""
+        stmt = update(ScraperRunORM).where(
+            ScraperRunORM.run_id == scraper_run.run_id
+        ).values(
+            completed_at=scraper_run.completed_at,
+            status=scraper_run.status.value,
+            entities_processed=scraper_run.entities_processed,
+            entities_added=scraper_run.entities_added,
+            entities_modified=scraper_run.entities_modified,
+            entities_removed=scraper_run.entities_removed,
+            critical_changes=scraper_run.critical_changes,
+            high_risk_changes=scraper_run.high_risk_changes,
+            medium_risk_changes=scraper_run.medium_risk_changes,
+            low_risk_changes=scraper_run.low_risk_changes,
+            error_message=scraper_run.error_message
+        )
+        
+        await self.session.execute(stmt)
+        await self.session.flush()
+        return scraper_run
+    
+    async def get_by_run_id(self, run_id: str) -> Optional[ScraperRunDomain]:
         """Get by ID."""
         try:
-            orm_run = self.session.query(ScraperRunORM).filter(
-                ScraperRunORM.run_id == run_id
-            ).first()
+            stmt = select(ScraperRunORM).where(ScraperRunORM.run_id == run_id)
+            result = await self.session.execute(stmt)
+            orm_run = result.scalar_one_or_none()
             return self._orm_to_domain(orm_run) if orm_run else None
         except Exception as e:
             self.logger.error(f"Error in get_by_run_id: {e}")
             return None
     
-    def find_recent_runs(
+    async def find_recent(
         self,
+        hours: int = 24,
         source: Optional[DataSource] = None,
-        status: Optional[ScrapingStatus] = None,
-        limit: int = 10,
-        offset: int = 0
+        limit: Optional[int] = None
     ) -> List[ScraperRunDomain]:
         """Find recent runs."""
         try:
-            query = self.session.query(ScraperRunORM)
+            since = datetime.utcnow() - timedelta(hours=hours)
+            stmt = select(ScraperRunORM).where(ScraperRunORM.started_at >= since)
             
             if source:
-                query = query.filter(ScraperRunORM.source == source.value)
+                stmt = stmt.where(ScraperRunORM.source == source.value)
             
-            if status:
-                query = query.filter(ScraperRunORM.status == status.value)
+            stmt = stmt.order_by(desc(ScraperRunORM.started_at))
             
-            query = query.order_by(desc(ScraperRunORM.started_at))
-            query = query.offset(offset).limit(limit)
+            if limit:
+                stmt = stmt.limit(limit)
             
-            orm_runs = query.all()
+            result = await self.session.execute(stmt)
+            orm_runs = result.scalars().all()
             return [self._orm_to_domain(orm_run) for orm_run in orm_runs]
         except Exception as e:
-            self.logger.error(f"Error in find_recent_runs: {e}")
+            self.logger.error(f"Error in find_recent: {e}")
             return []
     
-    def get_last_successful_run(self, source: DataSource) -> Optional[ScraperRunDomain]:
-        """Get last successful run."""
-        try:
-            orm_run = self.session.query(ScraperRunORM).filter(
-                and_(
-                    ScraperRunORM.source == source.value,
-                    ScraperRunORM.status == ScrapingStatus.COMPLETED.value
-                )
-            ).order_by(desc(ScraperRunORM.completed_at)).first()
-            
-            return self._orm_to_domain(orm_run) if orm_run else None
-        except Exception as e:
-            self.logger.error(f"Error in get_last_successful_run: {e}")
-            return None
-    
-    def get_run_statistics(
+    async def count_by_status(
         self,
-        days: int = 7,
+        since: Optional[datetime] = None,
         source: Optional[DataSource] = None
-    ) -> Dict[str, Any]:
-        """Get statistics."""
+    ) -> Dict[ScrapingStatus, int]:
+        """Count runs by status."""
         try:
-            since = datetime.utcnow() - timedelta(days=days)
-            
-            query = self.session.query(ScraperRunORM).filter(
-                ScraperRunORM.started_at >= since
+            stmt = select(
+                ScraperRunORM.status,
+                func.count(ScraperRunORM.run_id).label('count')
             )
             
+            if since:
+                stmt = stmt.where(ScraperRunORM.started_at >= since)
+            
             if source:
-                query = query.filter(ScraperRunORM.source == source.value)
+                stmt = stmt.where(ScraperRunORM.source == source.value)
             
-            runs = query.all()
+            stmt = stmt.group_by(ScraperRunORM.status)
+            result = await self.session.execute(stmt)
             
-            if not runs:
-                return {
-                    'total_runs': 0,
-                    'successful_runs': 0,
-                    'failed_runs': 0,
-                    'average_duration_ms': 0
-                }
+            counts = {}
+            for row in result:
+                try:
+                    status = ScrapingStatus(row.status)
+                    counts[status] = row.count
+                except:
+                    pass
             
-            successful = [r for r in runs if r.status == ScrapingStatus.COMPLETED.value]
-            failed = [r for r in runs if r.status == ScrapingStatus.FAILED.value]
-            
-            total_duration = sum(r.processing_time_ms or 0 for r in successful)
-            avg_duration = total_duration / len(successful) if successful else 0
-            
-            return {
-                'total_runs': len(runs),
-                'successful_runs': len(successful),
-                'failed_runs': len(failed),
-                'average_duration_ms': avg_duration
-            }
+            return counts
         except Exception as e:
-            self.logger.error(f"Error in get_run_statistics: {e}")
+            self.logger.error(f"Error in count_by_status: {e}")
             return {}
+    
+    async def health_check(self) -> bool:
+        """Check repository health."""
+        try:
+            stmt = select(func.count(ScraperRunORM.run_id)).limit(1)
+            await self.session.execute(stmt)
+            return True
+        except:
+            return False

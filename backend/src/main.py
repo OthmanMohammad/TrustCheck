@@ -1,29 +1,27 @@
 """
-TrustCheck API - Simple, Single Version
+TrustCheck API - Async Only
 """
-
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
-import logging
+import uuid
 
 from src.core.config import settings
 from src.core.logging_config import get_logger
+from src.infrastructure.database.connection import init_db, close_db
 from src.api.change_detection import router as api_router
 
 logger = get_logger(__name__)
-
-# ======================== LIFESPAN ========================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
     logger.info(f"Starting {settings.project_name} v{settings.version}")
+    await init_db()
     yield
+    await close_db()
     logger.info("Shutting down application")
-
-# ======================== CREATE APPLICATION ========================
 
 app = FastAPI(
     title=settings.project_name,
@@ -33,8 +31,6 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
-
-# ======================== MIDDLEWARE ========================
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,26 +43,24 @@ app.add_middleware(
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     """Add request ID to all requests."""
-    import uuid
     request.state.request_id = str(uuid.uuid4())
     response = await call_next(request)
     response.headers["X-Request-ID"] = request.state.request_id
     return response
 
-# ======================== ROUTERS ========================
-
-# Include the API router
-app.include_router(api_router, tags=["TrustCheck API"])
-
-# ======================== HEALTH CHECK ========================
+app.include_router(api_router)
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    from src.infrastructure.database.connection import db_manager
+    db_healthy = await db_manager.check_connection()
+    
     return {
-        "status": "healthy",
+        "status": "healthy" if db_healthy else "degraded",
         "version": settings.version,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "database": "connected" if db_healthy else "disconnected"
     }
 
 @app.get("/")

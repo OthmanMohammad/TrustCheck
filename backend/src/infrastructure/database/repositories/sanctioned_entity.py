@@ -1,25 +1,23 @@
 """
-Simple Sanctioned Entity Repository - Just Sync Methods That Work
+Sanctioned Entity Repository - Async Implementation
 """
-
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, func, text, String
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, and_, or_, func, desc, String
+from sqlalchemy.orm import selectinload
 
 from src.core.domain.entities import SanctionedEntityDomain, PersonalInfo, Address
-from src.core.domain.repositories import SanctionedEntityRepository
 from src.core.enums import DataSource, EntityType
-from src.core.exceptions import DatabaseError, handle_exception
 from src.core.logging_config import get_logger
 from src.infrastructure.database.models import SanctionedEntity as SanctionedEntityORM
 
 logger = get_logger(__name__)
 
 class SQLAlchemySanctionedEntityRepository:
-    """Simple sync-only repository that actually works."""
+    """Async repository for sanctioned entities."""
     
-    def __init__(self, session: Session):
+    def __init__(self, session: AsyncSession):
         self.session = session
         self.logger = get_logger(__name__)
     
@@ -68,46 +66,46 @@ class SQLAlchemySanctionedEntityRepository:
             content_hash=orm_entity.content_hash
         )
     
-    def find_all(
+    async def find_all(
         self,
         active_only: bool = True,
         limit: Optional[int] = None,
         offset: int = 0
     ) -> List[SanctionedEntityDomain]:
-        """Find all entities - SIMPLE SYNC VERSION."""
+        """Find all entities."""
         try:
-            query = self.session.query(SanctionedEntityORM)
+            stmt = select(SanctionedEntityORM)
             
             if active_only:
-                query = query.filter(SanctionedEntityORM.is_active == True)
+                stmt = stmt.where(SanctionedEntityORM.is_active == True)
             
-            query = query.order_by(desc(SanctionedEntityORM.updated_at))
-            query = query.offset(offset)
+            stmt = stmt.order_by(desc(SanctionedEntityORM.updated_at))
+            stmt = stmt.offset(offset)
             
             if limit:
-                query = query.limit(limit)
+                stmt = stmt.limit(limit)
             
-            orm_entities = query.all()
+            result = await self.session.execute(stmt)
+            orm_entities = result.scalars().all()
             return [self._orm_to_domain(orm_entity) for orm_entity in orm_entities]
             
         except Exception as e:
             self.logger.error(f"Error in find_all: {e}")
             return []
     
-    def get_by_uid(self, uid: str) -> Optional[SanctionedEntityDomain]:
+    async def get_by_uid(self, uid: str) -> Optional[SanctionedEntityDomain]:
         """Get entity by UID."""
         try:
-            orm_entity = self.session.query(SanctionedEntityORM).filter(
-                SanctionedEntityORM.uid == uid
-            ).first()
-            
+            stmt = select(SanctionedEntityORM).where(SanctionedEntityORM.uid == uid)
+            result = await self.session.execute(stmt)
+            orm_entity = result.scalar_one_or_none()
             return self._orm_to_domain(orm_entity) if orm_entity else None
             
         except Exception as e:
             self.logger.error(f"Error in get_by_uid: {e}")
             return None
     
-    def find_by_source(
+    async def find_by_source(
         self, 
         source: DataSource, 
         active_only: bool = True,
@@ -116,27 +114,28 @@ class SQLAlchemySanctionedEntityRepository:
     ) -> List[SanctionedEntityDomain]:
         """Find entities by source."""
         try:
-            query = self.session.query(SanctionedEntityORM).filter(
+            stmt = select(SanctionedEntityORM).where(
                 SanctionedEntityORM.source == source.value
             )
             
             if active_only:
-                query = query.filter(SanctionedEntityORM.is_active == True)
+                stmt = stmt.where(SanctionedEntityORM.is_active == True)
             
-            query = query.order_by(desc(SanctionedEntityORM.updated_at))
-            query = query.offset(offset)
+            stmt = stmt.order_by(desc(SanctionedEntityORM.updated_at))
+            stmt = stmt.offset(offset)
             
             if limit:
-                query = query.limit(limit)
+                stmt = stmt.limit(limit)
             
-            orm_entities = query.all()
+            result = await self.session.execute(stmt)
+            orm_entities = result.scalars().all()
             return [self._orm_to_domain(orm_entity) for orm_entity in orm_entities]
             
         except Exception as e:
             self.logger.error(f"Error in find_by_source: {e}")
             return []
     
-    def find_by_entity_type(
+    async def find_by_entity_type(
         self, 
         entity_type: EntityType,
         limit: Optional[int] = None,
@@ -144,25 +143,28 @@ class SQLAlchemySanctionedEntityRepository:
     ) -> List[SanctionedEntityDomain]:
         """Find entities by type."""
         try:
-            query = self.session.query(SanctionedEntityORM).filter(
-                SanctionedEntityORM.entity_type == entity_type.value,
-                SanctionedEntityORM.is_active == True
+            stmt = select(SanctionedEntityORM).where(
+                and_(
+                    SanctionedEntityORM.entity_type == entity_type.value,
+                    SanctionedEntityORM.is_active == True
+                )
             )
             
-            query = query.order_by(desc(SanctionedEntityORM.updated_at))
-            query = query.offset(offset)
+            stmt = stmt.order_by(desc(SanctionedEntityORM.updated_at))
+            stmt = stmt.offset(offset)
             
             if limit:
-                query = query.limit(limit)
+                stmt = stmt.limit(limit)
             
-            orm_entities = query.all()
+            result = await self.session.execute(stmt)
+            orm_entities = result.scalars().all()
             return [self._orm_to_domain(orm_entity) for orm_entity in orm_entities]
             
         except Exception as e:
             self.logger.error(f"Error in find_by_entity_type: {e}")
             return []
     
-    def search_by_name(
+    async def search_by_name(
         self, 
         name: str, 
         fuzzy: bool = False,
@@ -171,54 +173,73 @@ class SQLAlchemySanctionedEntityRepository:
     ) -> List[SanctionedEntityDomain]:
         """Search entities by name."""
         try:
-            query = self.session.query(SanctionedEntityORM).filter(
-                or_(
-                    SanctionedEntityORM.name.ilike(f'%{name}%'),
-                    func.cast(SanctionedEntityORM.aliases, String).ilike(f'%{name}%')
-                ),
-                SanctionedEntityORM.is_active == True
+            # For JSON fields, we need to cast to text for ILIKE
+            stmt = select(SanctionedEntityORM).where(
+                and_(
+                    or_(
+                        SanctionedEntityORM.name.ilike(f'%{name}%'),
+                        # For aliases (JSON array), we need different approach
+                        func.cast(SanctionedEntityORM.aliases, String).ilike(f'%{name}%')
+                    ),
+                    SanctionedEntityORM.is_active == True
+                )
             )
             
-            query = query.order_by(SanctionedEntityORM.name)
-            query = query.offset(offset).limit(limit)
-            orm_entities = query.all()
+            stmt = stmt.order_by(SanctionedEntityORM.name)
+            stmt = stmt.offset(offset).limit(limit)
             
+            result = await self.session.execute(stmt)
+            orm_entities = result.scalars().all()
             return [self._orm_to_domain(orm_entity) for orm_entity in orm_entities]
             
         except Exception as e:
             self.logger.error(f"Error in search_by_name: {e}")
             return []
     
-    def get_statistics(self) -> Dict[str, Any]:
+    async def get_statistics(self) -> Dict[str, Any]:
         """Get repository statistics."""
         try:
-            total_active = self.session.query(SanctionedEntityORM).filter(
+            # Total active
+            active_stmt = select(func.count(SanctionedEntityORM.id)).where(
                 SanctionedEntityORM.is_active == True
-            ).count()
+            )
+            active_result = await self.session.execute(active_stmt)
+            total_active = active_result.scalar() or 0
             
-            total_inactive = self.session.query(SanctionedEntityORM).filter(
+            # Total inactive
+            inactive_stmt = select(func.count(SanctionedEntityORM.id)).where(
                 SanctionedEntityORM.is_active == False
-            ).count()
+            )
+            inactive_result = await self.session.execute(inactive_stmt)
+            total_inactive = inactive_result.scalar() or 0
             
-            source_stats = self.session.query(
+            # By source
+            source_stmt = select(
                 SanctionedEntityORM.source,
                 func.count(SanctionedEntityORM.id).label('count')
-            ).filter(
+            ).where(
                 SanctionedEntityORM.is_active == True
-            ).group_by(SanctionedEntityORM.source).all()
+            ).group_by(SanctionedEntityORM.source)
             
-            type_stats = self.session.query(
+            source_result = await self.session.execute(source_stmt)
+            source_stats = {row.source: row.count for row in source_result}
+            
+            # By type
+            type_stmt = select(
                 SanctionedEntityORM.entity_type,
                 func.count(SanctionedEntityORM.id).label('count')
-            ).filter(
+            ).where(
                 SanctionedEntityORM.is_active == True
-            ).group_by(SanctionedEntityORM.entity_type).all()
+            ).group_by(SanctionedEntityORM.entity_type)
+            
+            type_result = await self.session.execute(type_stmt)
+            type_stats = {row.entity_type: row.count for row in type_result}
             
             return {
                 'total_active': total_active,
                 'total_inactive': total_inactive,
-                'by_source': {row.source: row.count for row in source_stats},
-                'by_type': {row.entity_type: row.count for row in type_stats},
+                'by_source': source_stats,
+                'by_type': type_stats,
                 'last_updated': datetime.utcnow().isoformat()
             }
             
@@ -232,10 +253,15 @@ class SQLAlchemySanctionedEntityRepository:
                 'last_updated': datetime.utcnow().isoformat()
             }
     
-    def health_check(self) -> bool:
+    async def get_all_for_change_detection(self, source: DataSource) -> List[SanctionedEntityDomain]:
+        """Get all entities for change detection."""
+        return await self.find_by_source(source, active_only=True, limit=None)
+    
+    async def health_check(self) -> bool:
         """Check repository health."""
         try:
-            self.session.execute(text("SELECT 1"))
+            stmt = select(func.count(SanctionedEntityORM.id)).limit(1)
+            await self.session.execute(stmt)
             return True
         except:
             return False

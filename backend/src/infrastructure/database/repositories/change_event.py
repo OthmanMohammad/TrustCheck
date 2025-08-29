@@ -1,25 +1,23 @@
 """
-Simple Change Event Repository - Just Sync Methods That Work
+Change Event Repository - Async Implementation
 """
-
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, and_, desc, func
+from uuid import UUID
 
 from src.core.domain.entities import ChangeEventDomain, FieldChange
-from src.core.domain.repositories import ChangeEventRepository
 from src.core.enums import DataSource, ChangeType, RiskLevel
-from src.core.exceptions import DatabaseError, handle_exception
 from src.infrastructure.database.models import ChangeEvent as ChangeEventORM
 from src.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 class SQLAlchemyChangeEventRepository:
-    """Simple sync-only repository that actually works."""
+    """Async repository for change events."""
     
-    def __init__(self, session: Session):
+    def __init__(self, session: AsyncSession):
         self.session = session
         self.logger = get_logger(__name__)
     
@@ -72,7 +70,40 @@ class SQLAlchemyChangeEventRepository:
             notification_channels=orm_change.notification_channels or []
         )
     
-    def find_recent(
+    async def create(self, change_event: ChangeEventDomain) -> ChangeEventDomain:
+        """Create new change event."""
+        orm_change = ChangeEventORM(
+            event_id=change_event.event_id,
+            entity_uid=change_event.entity_uid,
+            entity_name=change_event.entity_name,
+            source=change_event.source.value,
+            change_type=change_event.change_type.value,
+            risk_level=change_event.risk_level.value,
+            field_changes=[{
+                'field_name': fc.field_name,
+                'old_value': fc.old_value,
+                'new_value': fc.new_value,
+                'change_type': fc.change_type
+            } for fc in change_event.field_changes],
+            change_summary=change_event.change_summary,
+            old_content_hash=change_event.old_content_hash,
+            new_content_hash=change_event.new_content_hash,
+            detected_at=change_event.detected_at,
+            scraper_run_id=change_event.scraper_run_id,
+            processing_time_ms=change_event.processing_time_ms
+        )
+        
+        self.session.add(orm_change)
+        await self.session.flush()
+        return change_event
+    
+    async def create_many(self, events: List[ChangeEventDomain]) -> List[ChangeEventDomain]:
+        """Create multiple change events."""
+        for event in events:
+            await self.create(event)
+        return events
+    
+    async def find_recent(
         self,
         days: int = 7,
         source: Optional[DataSource] = None,
@@ -84,107 +115,104 @@ class SQLAlchemyChangeEventRepository:
         try:
             since = datetime.utcnow() - timedelta(days=days)
             
-            query = self.session.query(ChangeEventORM).filter(
+            stmt = select(ChangeEventORM).where(
                 ChangeEventORM.detected_at >= since
             )
             
             if source:
-                query = query.filter(ChangeEventORM.source == source.value)
+                stmt = stmt.where(ChangeEventORM.source == source.value)
             
             if risk_level:
-                query = query.filter(ChangeEventORM.risk_level == risk_level.value)
+                stmt = stmt.where(ChangeEventORM.risk_level == risk_level.value)
             
-            query = query.order_by(desc(ChangeEventORM.detected_at)).offset(offset)
+            stmt = stmt.order_by(desc(ChangeEventORM.detected_at)).offset(offset)
             
             if limit:
-                query = query.limit(limit)
+                stmt = stmt.limit(limit)
             
-            orm_events = query.all()
+            result = await self.session.execute(stmt)
+            orm_events = result.scalars().all()
             return [self._orm_to_domain(orm_event) for orm_event in orm_events]
             
         except Exception as e:
             self.logger.error(f"Error in find_recent: {e}")
             return []
     
-    def find_critical_changes(
+    async def find_critical_changes(
         self,
         since: Optional[datetime] = None,
         limit: Optional[int] = None
     ) -> List[ChangeEventDomain]:
         """Find critical changes."""
         try:
-            query = self.session.query(ChangeEventORM).filter(
+            stmt = select(ChangeEventORM).where(
                 ChangeEventORM.risk_level == 'CRITICAL'
             )
             
             if since:
-                query = query.filter(ChangeEventORM.detected_at >= since)
+                stmt = stmt.where(ChangeEventORM.detected_at >= since)
             
-            query = query.order_by(desc(ChangeEventORM.detected_at))
+            stmt = stmt.order_by(desc(ChangeEventORM.detected_at))
             
             if limit:
-                query = query.limit(limit)
+                stmt = stmt.limit(limit)
             
-            orm_events = query.all()
+            result = await self.session.execute(stmt)
+            orm_events = result.scalars().all()
             return [self._orm_to_domain(orm_event) for orm_event in orm_events]
             
         except Exception as e:
             self.logger.error(f"Error in find_critical_changes: {e}")
             return []
     
-    def get_change_summary(
+    async def find_by_risk_level(
         self,
-        days: int = 7,
-        source: Optional[DataSource] = None
-    ) -> Dict[str, Any]:
-        """Get change summary."""
+        risk_level: RiskLevel,
+        since: Optional[datetime] = None,
+        limit: Optional[int] = None
+    ) -> List[ChangeEventDomain]:
+        """Find changes by risk level."""
         try:
-            since = datetime.utcnow() - timedelta(days=days)
+            stmt = select(ChangeEventORM).where(
+                ChangeEventORM.risk_level == risk_level.value
+            )
             
-            risk_counts = self.count_by_risk_level(since=since, source=source)
-            type_counts = self.count_by_change_type(since=since, source=source)
+            if since:
+                stmt = stmt.where(ChangeEventORM.detected_at >= since)
             
-            total_changes = sum(risk_counts.values())
+            stmt = stmt.order_by(desc(ChangeEventORM.detected_at))
             
-            return {
-                'period_days': days,
-                'since': since.isoformat(),
-                'source': source.value if source else 'all',
-                'total_changes': total_changes,
-                'by_risk_level': {
-                    risk.value: count 
-                    for risk, count in risk_counts.items()
-                },
-                'by_change_type': {
-                    change_type.value: count 
-                    for change_type, count in type_counts.items()
-                }
-            }
+            if limit:
+                stmt = stmt.limit(limit)
+            
+            result = await self.session.execute(stmt)
+            orm_events = result.scalars().all()
+            return [self._orm_to_domain(orm_event) for orm_event in orm_events]
             
         except Exception as e:
-            self.logger.error(f"Error in get_change_summary: {e}")
-            return {}
+            self.logger.error(f"Error in find_by_risk_level: {e}")
+            return []
     
-    def count_by_risk_level(
+    async def count_by_risk_level(
         self,
         since: Optional[datetime] = None,
         source: Optional[DataSource] = None
     ) -> Dict[RiskLevel, int]:
         """Count by risk level."""
         try:
-            query = self.session.query(
+            stmt = select(
                 ChangeEventORM.risk_level,
                 func.count(ChangeEventORM.event_id).label('count')
             )
             
             if since:
-                query = query.filter(ChangeEventORM.detected_at >= since)
+                stmt = stmt.where(ChangeEventORM.detected_at >= since)
             
             if source:
-                query = query.filter(ChangeEventORM.source == source.value)
+                stmt = stmt.where(ChangeEventORM.source == source.value)
             
-            query = query.group_by(ChangeEventORM.risk_level)
-            result = query.all()
+            stmt = stmt.group_by(ChangeEventORM.risk_level)
+            result = await self.session.execute(stmt)
             
             counts = {}
             for row in result:
@@ -201,26 +229,26 @@ class SQLAlchemyChangeEventRepository:
             self.logger.error(f"Error in count_by_risk_level: {e}")
             return {}
     
-    def count_by_change_type(
+    async def count_by_change_type(
         self,
         since: Optional[datetime] = None,
         source: Optional[DataSource] = None
     ) -> Dict[ChangeType, int]:
         """Count by change type."""
         try:
-            query = self.session.query(
+            stmt = select(
                 ChangeEventORM.change_type,
                 func.count(ChangeEventORM.event_id).label('count')
             )
             
             if since:
-                query = query.filter(ChangeEventORM.detected_at >= since)
+                stmt = stmt.where(ChangeEventORM.detected_at >= since)
             
             if source:
-                query = query.filter(ChangeEventORM.source == source.value)
+                stmt = stmt.where(ChangeEventORM.source == source.value)
             
-            query = query.group_by(ChangeEventORM.change_type)
-            result = query.all()
+            stmt = stmt.group_by(ChangeEventORM.change_type)
+            result = await self.session.execute(stmt)
             
             counts = {}
             for row in result:
@@ -237,10 +265,11 @@ class SQLAlchemyChangeEventRepository:
             self.logger.error(f"Error in count_by_change_type: {e}")
             return {}
     
-    def health_check(self) -> bool:
+    async def health_check(self) -> bool:
         """Check repository health."""
         try:
-            self.session.execute(text("SELECT 1"))
+            stmt = select(func.count(ChangeEventORM.event_id)).limit(1)
+            await self.session.execute(stmt)
             return True
         except:
             return False
