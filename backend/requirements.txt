@@ -10,9 +10,12 @@ alembic==1.13.1
 psycopg2-binary==2.9.10
 asyncpg==0.29.0
 
-# Background Jobs
-celery==5.3.4
+# Background Jobs & Monitoring
+celery==5.2.7
 redis==5.0.1
+flower==2.0.1
+celery-redbeat==2.1.0
+kombu==5.3.4
 
 # HTTP Requests & Web Scraping
 httpx==0.25.2

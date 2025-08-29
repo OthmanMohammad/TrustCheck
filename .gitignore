@@ -29,3 +29,14 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Test files
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Celery beat schedule files
+celerybeat-schedule*
+celerybeat.pid
+
+
