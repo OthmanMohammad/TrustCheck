@@ -1,5 +1,5 @@
 """
-Change Detector Service
+Change Detector Service - ASYNC VERSION
 
 Core change detection logic that compares old vs new entities
 and identifies additions, modifications, and removals.
@@ -24,11 +24,11 @@ class EntityChange:
     old_content_hash: str = None
     new_content_hash: str = None
 
-# ======================== CHANGE DETECTOR CLASS ========================
+# ======================== ASYNC CHANGE DETECTOR CLASS ========================
 
-class ChangeDetector:
+class AsyncChangeDetector:
     """
-    change detection with comprehensive logging.
+    Change detection with comprehensive logging - ASYNC VERSION.
     
     Features:
     - Entity-level change detection (added/removed/modified)
@@ -53,9 +53,9 @@ class ChangeDetector:
             'dates_of_birth', 'places_of_birth', 'nationalities', 'remarks'
         }
     
-    # ======================== MAIN DETECTION METHOD ========================
+    # ======================== MAIN DETECTION METHOD (ASYNC) ========================
     
-    def detect_changes(
+    async def detect_changes(
         self,
         old_entities: List[Dict[str, Any]],
         new_entities: List[Dict[str, Any]],
@@ -64,7 +64,10 @@ class ChangeDetector:
         scraper_run_id: str
     ) -> Tuple[List[EntityChange], Dict[str, int]]:
         """
-        Main change detection with comprehensive metrics.
+        Main change detection with comprehensive metrics - ASYNC.
+        
+        Note: The actual logic is synchronous, but we make it async
+        to maintain consistency with the async architecture.
         
         Args:
             old_entities: Previous entity data
