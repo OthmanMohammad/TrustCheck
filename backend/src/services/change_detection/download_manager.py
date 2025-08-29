@@ -1,15 +1,15 @@
 """
-Download Manager Service
+Download Manager Service - ASYNC VERSION
 
 Handles content retrieval with optimization and error handling.
 Provides content hashing and change detection support.
 """
 
 import hashlib
-import requests
-from typing import Tuple, Optional
+import aiohttp
+from typing import Optional
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
 from sqlalchemy import text
 
@@ -28,39 +28,33 @@ class DownloadResult:
     success: bool
     error_message: Optional[str] = None
 
-# ======================== DOWNLOAD MANAGER CLASS ========================
+# ======================== ASYNC DOWNLOAD MANAGER CLASS ========================
 
-class DownloadManager:
+class AsyncDownloadManager:
     """
-    Handles content retrieval with optimization and error handling.
+    Handles content retrieval with optimization and error handling - ASYNC VERSION.
     
     Features:
     - Content hashing for change detection
-    - Request optimization with sessions
+    - Async HTTP requests
     - Comprehensive error handling
     - Performance monitoring
     """
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.session = self._create_session()
-    
-    def _create_session(self) -> requests.Session:
-        """Create optimized HTTP session."""
-        session = requests.Session()
-        session.headers.update({
+        self.headers = {
             'User-Agent': 'TrustCheck-Compliance-Platform/1.0 (sanctions-monitoring)',
             'Accept': 'application/xml, text/xml, text/csv, application/json, */*',
             'Accept-Encoding': 'gzip, deflate',
             'Accept-Language': 'en-US,en;q=0.9'
-        })
-        return session
+        }
     
-    # ======================== MAIN DOWNLOAD METHOD ========================
+    # ======================== MAIN DOWNLOAD METHOD (ASYNC) ========================
     
-    def download_content(self, url: str, timeout: int = 120) -> DownloadResult:
+    async def download_content(self, url: str, timeout: int = 120) -> DownloadResult:
         """
-        Download content with comprehensive error handling.
+        Download content with comprehensive error handling - ASYNC.
         
         Args:
             url: URL to download from
@@ -74,53 +68,54 @@ class DownloadManager:
         try:
             self.logger.info(f"Downloading content from: {url}")
             
-            # Make HTTP request
-            response = self.session.get(
-                url,
-                timeout=timeout,
-                stream=True,
-                allow_redirects=True
-            )
-            response.raise_for_status()
+            # Make async HTTP request
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    headers=self.headers,
+                    allow_redirects=True
+                ) as response:
+                    response.raise_for_status()
+                    
+                    # Get content
+                    content = await response.text()
+                    
+                    # Validate content size
+                    if len(content) < 1000:  # Suspiciously small for sanctions data
+                        raise ValueError(f"Content too small: {len(content)} bytes")
+                    
+                    # Calculate metrics
+                    size_bytes = len(content.encode('utf-8'))
+                    download_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                    content_hash = self._calculate_hash(content)
+                    
+                    self.logger.info(
+                        f"Downloaded {size_bytes:,} bytes in {download_time_ms}ms "
+                        f"(hash: {content_hash[:12]}...)"
+                    )
+                    
+                    return DownloadResult(
+                        content=content,
+                        content_hash=content_hash,
+                        size_bytes=size_bytes,
+                        download_time_ms=download_time_ms,
+                        url=url,
+                        success=True
+                    )
             
-            # Get content
-            content = response.text
-            
-            # Validate content size
-            if len(content) < 1000:  # Suspiciously small for sanctions data
-                raise ValueError(f"Content too small: {len(content)} bytes")
-            
-            # Calculate metrics
-            size_bytes = len(content.encode('utf-8'))
-            download_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            content_hash = self._calculate_hash(content)
-            
-            self.logger.info(
-                f"Downloaded {size_bytes:,} bytes in {download_time_ms}ms "
-                f"(hash: {content_hash[:12]}...)"
-            )
-            
-            return DownloadResult(
-                content=content,
-                content_hash=content_hash,
-                size_bytes=size_bytes,
-                download_time_ms=download_time_ms,
-                url=url,
-                success=True
-            )
-            
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             return self._create_error_result(url, start_time, f"Network error: {e}")
         except ValueError as e:
             return self._create_error_result(url, start_time, f"Validation error: {e}")
         except Exception as e:
             return self._create_error_result(url, start_time, f"Unexpected error: {e}")
     
-    # ======================== CHANGE DETECTION SUPPORT ========================
+    # ======================== CHANGE DETECTION SUPPORT (ASYNC) ========================
     
-    def should_skip_processing(self, content_hash: str, source: str) -> bool:
+    async def should_skip_processing(self, content_hash: str, source: str) -> bool:
         """
-        Check if content hash matches previous run (skip if unchanged).
+        Check if content hash matches previous run (skip if unchanged) - ASYNC.
         
         Args:
             content_hash: SHA-256 hash of current content
@@ -132,9 +127,9 @@ class DownloadManager:
         try:
             from src.infrastructure.database.connection import db_manager
             
-            with db_manager.get_session() as db:
+            async with db_manager.get_session() as session:
                 # Query for last successful content hash
-                last_run = db.execute(
+                result = await session.execute(
                     text("""
                         SELECT content_hash 
                         FROM scraper_runs 
@@ -145,7 +140,8 @@ class DownloadManager:
                         LIMIT 1
                     """),
                     {'source': source}
-                ).fetchone()
+                )
+                last_run = result.fetchone()
                 
                 if last_run and last_run.content_hash == content_hash:
                     self.logger.info(f"Content unchanged for {source}, skipping processing")
