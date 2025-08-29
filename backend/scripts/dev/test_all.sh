@@ -1,4 +1,3 @@
-#!/bin/bash
 # Comprehensive testing script
 
 set -e
