@@ -1,5 +1,5 @@
 """
-API v1 - Now Fully Async with Proper Await Calls
+API v1 - Fully Async with Proper Await Calls
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import List, Optional
