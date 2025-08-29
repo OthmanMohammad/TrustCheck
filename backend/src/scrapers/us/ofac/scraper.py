@@ -1,8 +1,8 @@
 """
-OFAC SDN List Scraper with Change Detection
+OFAC SDN List Scraper with Change Detection - FULLY ASYNC VERSION
 """
 
-import requests
+import aiohttp
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -10,7 +10,7 @@ from datetime import datetime
 import logging
 import time
 import hashlib
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete
 
 from src.scrapers.base.change_aware_scraper import ChangeAwareScraper
 from src.scrapers.base.scraper import ScrapingResult
@@ -41,11 +41,11 @@ class SanctionedEntityData:
     first_name: Optional[str] = None
     last_name: Optional[str] = None
 
-# ======================== ENHANCED OFAC SCRAPER ========================
+# ======================== ASYNC OFAC SCRAPER ========================
 
 class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
     """
-    OFAC SDN scraper with AUTOMATIC change detection.
+    OFAC SDN scraper with AUTOMATIC change detection - FULLY ASYNC.
     
     This scraper:
     1. Downloads OFAC SDN XML data
@@ -70,13 +70,12 @@ class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
         # Initialize with source URL for change detection
         super().__init__("us_ofac", self.SDN_URL)
         
-        # HTTP session for downloads
-        self.session = requests.Session()
-        self.session.headers.update({
+        # HTTP headers
+        self.headers = {
             'User-Agent': 'TrustCheck-Compliance-Platform/2.0',
             'Accept': 'application/xml, text/xml',
             'Accept-Encoding': 'gzip, deflate'
-        })
+        }
         
         # XML parsing
         self.namespace = None
@@ -96,36 +95,36 @@ class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
             'with_birth_dates': 0
         }
     
-    # ======================== LEGACY INTERFACE FOR COMPATIBILITY ========================
+    # ======================== CHANGE-AWARE SCRAPER INTERFACE (ASYNC) ========================
     
-    def scrape_and_store_legacy(self) -> ScrapingResult:
+    async def download_data(self) -> str:
         """
-        Legacy method that uses the old scraping approach.
-        Keep for backward compatibility with existing API endpoints.
+        Download OFAC XML data - ASYNC.
+        
+        Note: This method is not used in ChangeAwareScraper,
+        but we implement it for compatibility.
         """
-        return super(ChangeAwareScraper, self).scrape_and_store()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                self.SDN_URL,
+                headers=self.headers,
+                timeout=aiohttp.ClientTimeout(total=120)
+            ) as response:
+                response.raise_for_status()
+                return await response.text()
     
-    # ======================== CHANGE-AWARE SCRAPER INTERFACE ========================
-    
-    def download_data(self) -> str:
+    async def parse_entities(self, xml_content: str) -> List[Dict[str, Any]]:
         """
-        This method is no longer needed.
-        ChangeAwareScraper handles download via DownloadManager.
-        """
-        raise NotImplementedError(
-            "download_data() is not used in ChangeAwareScraper. "
-            "Downloads are handled automatically by DownloadManager."
-        )
-    
-    def parse_entities(self, xml_content: str) -> List[Dict[str, Any]]:
-        """
-        Parse OFAC XML into entity dictionaries.
+        Parse OFAC XML into entity dictionaries - ASYNC.
+        
+        Note: The parsing itself is synchronous (XML parsing),
+        but we make the method async for consistency.
         
         Returns List[Dict] instead of List[SanctionedEntityData]
         to match ChangeAwareScraper interface.
         """
-        # Parse XML using existing logic
-        parsed_entities = self.parse_ofac_entities_internal(xml_content)
+        # Parse XML using existing logic (synchronous)
+        parsed_entities = self._parse_ofac_entities_internal(xml_content)
         
         # Convert to dictionaries for change detection
         entity_dicts = []
@@ -146,23 +145,25 @@ class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
         
         return entity_dicts
     
-    def store_entities(self, entity_dicts: List[Dict[str, Any]]) -> None:
+    async def store_entities(self, entity_dicts: List[Dict[str, Any]]) -> None:
         """
-        Store entity dictionaries in database.
+        Store entity dictionaries in database - ASYNC.
         
         Args:
             entity_dicts: List of entity dictionaries from parse_entities()
         """
         self.logger.info(f"Storing {len(entity_dicts)} OFAC entities in database...")
         
-        with db_manager.get_session() as db:
+        async with db_manager.get_session() as session:
             try:
                 # Clear existing OFAC data
-                deleted_count = db.query(SanctionedEntity).filter(
-                    SanctionedEntity.source == "OFAC"
-                ).delete()
+                await session.execute(
+                    delete(SanctionedEntity).where(
+                        SanctionedEntity.source == "OFAC"
+                    )
+                )
                 
-                self.logger.info(f"Deleted {deleted_count} existing OFAC entities")
+                self.logger.info(f"Deleted existing OFAC entities")
                 
                 # Insert new entities
                 stored_count = 0
@@ -183,33 +184,35 @@ class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
                         places_of_birth=entity_dict.get('places_of_birth'),
                         nationalities=entity_dict.get('nationalities'),
                         remarks=entity_dict.get('remarks'),
-                        content_hash=content_hash,  # New: Store content hash
+                        content_hash=content_hash,
                         last_seen=datetime.utcnow()
                     )
-                    db.add(db_entity)
+                    session.add(db_entity)
                     stored_count += 1
                     
                     # Commit in batches for performance
                     if stored_count % 1000 == 0:
-                        db.commit()
+                        await session.commit()
                         self.logger.info(f"Stored {stored_count}/{len(entity_dicts)} entities...")
                 
                 # Final commit
-                db.commit()
+                await session.commit()
                 
                 self.logger.info(f"Successfully stored {stored_count} OFAC entities in database")
                 
             except Exception as e:
-                db.rollback()
+                await session.rollback()
                 self.logger.error(f"Failed to store entities: {e}")
                 raise
     
-    # ======================== INTERNAL PARSING METHODS ========================
+    # ======================== INTERNAL PARSING METHODS (SYNCHRONOUS) ========================
     
-    def parse_ofac_entities_internal(self, xml_content: str) -> List[SanctionedEntityData]:
+    def _parse_ofac_entities_internal(self, xml_content: str) -> List[SanctionedEntityData]:
         """
         Internal method that parses XML content.
         Returns SanctionedEntityData objects for internal use.
+        
+        Note: This remains synchronous as XML parsing doesn't benefit from async.
         """
         self.logger.info("Parsing OFAC XML content...")
         
@@ -270,7 +273,7 @@ class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
             self.logger.error(f"Unexpected parsing error: {e}")
             raise
     
-    # ======================== XML PARSING HELPERS ========================
+    # ======================== XML PARSING HELPERS (SYNCHRONOUS) ========================
     
     def _detect_namespace(self, root) -> str:
         """Detect and store XML namespace."""
@@ -379,7 +382,7 @@ class OFACScraper(ChangeAwareScraper):  # Inherits from ChangeAwareScraper
             last_updated=datetime.utcnow()
         )
     
-    # ======================== DATA EXTRACTION HELPERS ========================
+    # ======================== DATA EXTRACTION HELPERS (SYNCHRONOUS) ========================
     
     def _update_stats(self, entity: SanctionedEntityData):
         """Update parsing statistics."""
