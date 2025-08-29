@@ -1,89 +1,97 @@
-version: '3.8'
+x-app-common: &app-common
+  build: 
+    context: ./backend
+    dockerfile: Dockerfile
+  env_file: ./.env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - trustcheck-network
 
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - trustcheck-network
 
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: trustcheck
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    env_file: ./.env
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
-      retries: 5
-
-  worker:
-    build: .
-    command: celery -A src.celery_app.app worker --loglevel=info
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/trustcheck
-    volumes:
-      - ./src:/app/src
-      - ./alembic:/app/alembic
-
-  beat:
-    build: .
-    command: celery -A src.celery_app.app beat --loglevel=info
-    depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/trustcheck
-    volumes:
-      - ./src:/app/src
-
-  flower:
-    build: .
-    command: celery -A src.celery_app.app flower --port=5555
-    ports:
-      - "5555:5555"
-    depends_on:
-      - redis
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      retries: 10
+      start_period: 10s
+    networks:
+      - trustcheck-network
 
   web:
-    build: .
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    <<: *app-common
+    restart: unless-stopped
     ports:
       - "8000:8000"
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/trustcheck
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
-      - ./src:/app/src
-      - ./alembic:/app/alembic
+      - ./backend/src:/app/src
+      - ./backend/scripts:/app/scripts 
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    <<: *app-common
+    restart: unless-stopped
+    command: ["celery", "-A", "src.celery_app.app", "worker", "--loglevel=info"]
+    volumes:
+      - ./backend/src:/app/src
+
+  beat:
+    <<: *app-common
+    restart: unless-stopped
+    command: ["celery", "-A", "src.celery_app.app", "beat", "--loglevel=info"]
+    volumes:
+      - ./backend/src:/app/src
+
+  flower:
+    <<: *app-common
+    restart: unless-stopped
+    command: ["celery", "-A", "src.celery_app.app", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
 
 volumes:
   postgres_data:
+  redis_data:
+
+networks:
+  trustcheck-network:
+    driver: bridge
