@@ -39,4 +39,9 @@ __pycache__/
 celerybeat-schedule*
 celerybeat.pid
 
-
+# Terraform
+*.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
