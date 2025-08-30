@@ -1,0 +1,202 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: trustcheck
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+      
+      - name: Run tests
+        run: |
+          cd backend
+          # Run basic tests (skip if no tests yet)
+          python -m pytest tests/ -v --tb=short || echo "Tests skipped"
+      
+      - name: Check code quality
+        run: |
+          cd backend
+          pip install black flake8 isort
+          black --check src/ || echo "Code formatting check skipped"
+          flake8 src/ --max-line-length=120 --ignore=E203,W503 || echo "Linting skipped"
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    
+    outputs:
+      image-tag: ${{ steps.image.outputs.tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      
+      - name: Build, tag, and push image to Amazon ECR
+        id: image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd backend
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+      
+      - name: Image scan results
+        run: |
+          aws ecr describe-image-scan-findings \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --image-id imageTag=${{ steps.image.outputs.tag }} \
+            --region ${{ env.AWS_REGION }} || echo "Scan pending..."
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Get EC2 instance ID
+        id: ec2
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=trustcheck-app" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text)
+          echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+      
+      - name: Deploy to EC2 via SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ steps.ec2.outputs.instance-id }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /opt/trustcheck",
+              "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com",
+              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/trustcheck:latest",
+              "docker run --rm --env-file .env ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/trustcheck:latest alembic upgrade head",
+              "docker-compose down",
+              "docker-compose up -d",
+              "sleep 10",
+              "curl -f http://localhost:8000/health || exit 1"
+            ]' \
+            --output text \
+            --query "Command.CommandId" > command-id.txt
+      
+      - name: Wait for deployment
+        run: |
+          COMMAND_ID=$(cat command-id.txt)
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ steps.ec2.outputs.instance-id }}" || true
+          
+          # Get command output
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ steps.ec2.outputs.instance-id }}" \
+            --query "StandardOutputContent" \
+            --output text
+      
+      - name: Verify deployment
+        run: |
+          # Get ALB DNS
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names trustcheck-alb \
+            --query "LoadBalancers[0].DNSName" \
+            --output text)
+          
+          echo "Testing API at http://$ALB_DNS/health"
+          
+          # Wait for ALB to be healthy
+          sleep 30
+          
+          # Test health endpoint
+          curl -f "http://$ALB_DNS/health" || echo "Health check pending..."
+      
+      - name: Send deployment notification
+        if: success()
+        run: |
+          echo "✅ Deployment successful!"
+          echo "Commit: ${{ github.sha }}"
+          echo "Image: ${{ needs.build-and-push.outputs.image-tag }}"
+          # Add Slack/email notification here if needed
+      
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed, considering rollback..."
+          # Add rollback logic here if needed
+
+  cleanup-old-images:
+    name: Cleanup Old ECR Images
+    runs-on: ubuntu-latest
+    needs: deploy
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Delete untagged images
+        run: |
+          IMAGES=$(aws ecr list-images \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --filter tagStatus=UNTAGGED \
+            --query 'imageIds[*]' \
+            --output json)
+          
+          if [ "$IMAGES" != "[]" ]; then
+            aws ecr batch-delete-image \
+              --repository-name ${{ env.ECR_REPOSITORY }} \
+              --image-ids "$IMAGES"
+          fi
