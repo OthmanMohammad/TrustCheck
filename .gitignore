@@ -45,3 +45,15 @@ celerybeat.pid
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+*.backup
+terraform.tfstate.backup
+tfplan
+
+# Secrets and sensitive files
+infrastructure/modules/compute/keys/*
+ecr-pass.txt
+*.pem
+*.key
+*.cert
+.env
+secrets.auto.tfvars
