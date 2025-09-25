@@ -208,7 +208,7 @@ EOF
 # ==================== HEALTH CHECK SCRIPT ====================
 cat > /opt/trustcheck/health-check.sh << 'SCRIPT'
 #!/bin/bash
-HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+HEALTH_STATUS=$(curl -s -o /dev/null -w "%%{http_code}" http://localhost:8000/health)
 
 if [ "$HEALTH_STATUS" != "200" ]; then
     echo "$(date): Health check failed, restarting services..."
