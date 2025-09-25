@@ -66,8 +66,8 @@ class SanctionedEntity(Base):
         Index('idx_entity_updated_at', 'updated_at'),
         Index('idx_entity_content_hash', 'content_hash'),
         # PostgreSQL-specific indexes for JSON fields
-        Index('idx_entity_programs_gin', 'programs', postgresql_using='gin'),
         # database setup needs a PostgreSQL extension for JSON indexing so commenting out for now
+        # Index('idx_entity_programs_gin', 'programs', postgresql_using='gin'),
         # Index('idx_entity_aliases_gin', 'aliases', postgresql_using='gin'),
     )
 
