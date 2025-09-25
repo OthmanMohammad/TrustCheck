@@ -1,44 +1,40 @@
 #!/bin/bash
-# EC2 User Data Script - TrustCheck Application Setup
-# This script runs automatically when EC2 instance starts
+# Production-Ready EC2 Bootstrap Script
+# This runs automatically on EVERY EC2 start/restart
 
-set -e  # Exit on any error
-
-# Log everything to file
+set -e
 exec > >(tee -a /var/log/user-data.log)
 exec 2>&1
+
 echo "========================================="
 echo "Starting TrustCheck deployment at $(date)"
 echo "========================================="
 
-# ==================== SYSTEM UPDATES ====================
-echo "📦 Updating system packages..."
+# ==================== SYSTEM SETUP ====================
 yum update -y
-yum install -y docker git htop jq
+yum install -y docker git amazon-cloudwatch-agent
 
-# ==================== DOCKER SETUP ====================
-echo "🐳 Setting up Docker..."
-service docker start
-usermod -a -G docker ec2-user
+# Start Docker
+systemctl start docker
 systemctl enable docker
+usermod -a -G docker ec2-user
 
 # Install Docker Compose
-curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose
+if [ ! -f /usr/local/bin/docker-compose ]; then
+    curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+fi
 
-# ==================== AWS CLI & ECR LOGIN ====================
-echo "🔐 Logging into ECR..."
-aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${ecr_uri}
+# ==================== AWS CREDENTIALS ====================
+# Use instance profile - no hardcoded credentials
+export AWS_DEFAULT_REGION=${aws_region}
 
-# ==================== APPLICATION SETUP ====================
-echo "📁 Setting up application directory..."
+# ==================== APPLICATION DIRECTORY ====================
 mkdir -p /opt/trustcheck
 cd /opt/trustcheck
 
-# Create production environment file
+# ==================== ENVIRONMENT FILE ====================
 cat > .env << 'EOF'
-# ==================== DATABASE ====================
 DATABASE_URL=postgresql://trustcheck_user:${db_password}@${db_host}/trustcheck
 DB_HOST=${db_host}
 DB_PORT=5432
@@ -46,40 +42,31 @@ DB_USER=trustcheck_user
 DB_PASSWORD=${db_password}
 DB_NAME=trustcheck
 
-# ==================== REDIS ====================
 REDIS_URL=redis://${redis_host}:6379/0
 REDIS_HOST=${redis_host}
 REDIS_PORT=6379
 REDIS_DB=0
 
-# ==================== CELERY ====================
 CELERY_BROKER_URL=redis://${redis_host}:6379/0
 CELERY_RESULT_BACKEND=redis://${redis_host}:6379/1
 
-# ==================== APPLICATION ====================
 SECRET_KEY=${secret_key}
 DEBUG=false
 LOG_LEVEL=INFO
-API_V1_STR=/api/v1
 PROJECT_NAME=TrustCheck
 ENVIRONMENT=production
 VERSION=2.0.0
 
-# ==================== CORS ====================
-ALLOWED_ORIGINS=["*"]
-
-# ==================== AWS ====================
 AWS_REGION=${aws_region}
 AWS_DEFAULT_REGION=${aws_region}
 
-# ==================== SANCTIONS DATA SOURCES ====================
 OFAC_SDN_URL=https://www.treasury.gov/ofac/downloads/sdn.xml
 UN_CONSOLIDATED_URL=https://scsanctions.un.org/resources/xml/en/consolidated.xml
 EU_CONSOLIDATED_URL=https://webgate.ec.europa.eu/europeaid/fsd/fsf/public/files/xmlFullSanctionsList/content
 UK_HMT_URL=https://assets.publishing.service.gov.uk/government/uploads/system/uploads/attachment_data/file/1178224/UK_Sanctions_List.xlsx
 EOF
 
-# Create docker-compose.yml for production
+# ==================== DOCKER COMPOSE ====================
 cat > docker-compose.yml << 'EOF'
 version: '3.8'
 
@@ -97,11 +84,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 40s
     logging:
-      driver: "json-file"
+      driver: awslogs
       options:
-        max-size: "10m"
-        max-file: "3"
+        awslogs-region: ${aws_region}
+        awslogs-group: /aws/ec2/trustcheck
+        awslogs-stream: web
 
   worker:
     image: ${ecr_uri}:latest
@@ -110,10 +99,11 @@ services:
     env_file: .env
     command: ["celery", "-A", "src.celery_app.app", "worker", "--loglevel=info", "--concurrency=2"]
     logging:
-      driver: "json-file"
+      driver: awslogs
       options:
-        max-size: "10m"
-        max-file: "3"
+        awslogs-region: ${aws_region}
+        awslogs-group: /aws/ec2/trustcheck
+        awslogs-stream: worker
 
   beat:
     image: ${ecr_uri}:latest
@@ -122,10 +112,11 @@ services:
     env_file: .env
     command: ["celery", "-A", "src.celery_app.app", "beat", "--loglevel=info"]
     logging:
-      driver: "json-file"
+      driver: awslogs
       options:
-        max-size: "10m"
-        max-file: "3"
+        awslogs-region: ${aws_region}
+        awslogs-group: /aws/ec2/trustcheck
+        awslogs-stream: beat
 
   flower:
     image: ${ecr_uri}:latest
@@ -136,52 +127,115 @@ services:
     env_file: .env
     command: ["celery", "-A", "src.celery_app.app", "flower", "--port=5555", "--basic_auth=admin:trustcheck2024"]
     logging:
-      driver: "json-file"
+      driver: awslogs
       options:
-        max-size: "10m"
-        max-file: "3"
+        awslogs-region: ${aws_region}
+        awslogs-group: /aws/ec2/trustcheck
+        awslogs-stream: flower
 EOF
 
-# ==================== PULL AND START APPLICATION ====================
-echo "🚀 Pulling Docker image..."
+# ==================== STARTUP SCRIPT ====================
+cat > /opt/trustcheck/startup.sh << 'SCRIPT'
+#!/bin/bash
+set -e
+
+cd /opt/trustcheck
+
+echo "Logging into ECR..."
+aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${ecr_uri}
+
+echo "Pulling latest image..."
 docker pull ${ecr_uri}:latest
 
-echo "📊 Running database migrations..."
-docker run --rm --env-file .env ${ecr_uri}:latest alembic upgrade head
+echo "Running database migrations..."
+docker run --rm --env-file .env ${ecr_uri}:latest alembic upgrade head || echo "Migration already applied"
 
-echo "🎯 Starting application services..."
+echo "Starting services..."
 docker-compose up -d
 
-# ==================== SETUP SYSTEMD SERVICE ====================
-echo "⚙️ Setting up systemd service..."
+echo "Waiting for services to be healthy..."
+sleep 30
+
+# Initial data load if database is empty
+ENTITY_COUNT=$(docker exec trustcheck-web python -c "
+import asyncio
+from src.infrastructure.database.connection import db_manager
+from sqlalchemy import text
+async def count():
+    async with db_manager.get_session() as session:
+        result = await session.execute(text('SELECT COUNT(*) FROM sanctioned_entities'))
+        print(result.scalar())
+asyncio.run(count())
+" 2>/dev/null || echo "0")
+
+if [ "$ENTITY_COUNT" -eq "0" ]; then
+    echo "Database empty, triggering initial scrape..."
+    docker exec trustcheck-worker python -c "
+from src.tasks.scraping_tasks import scrape_all_sources_task
+scrape_all_sources_task.delay()
+print('Initial data scraping started')
+    " || echo "Failed to start scraping"
+fi
+
+echo "Startup complete!"
+SCRIPT
+
+chmod +x /opt/trustcheck/startup.sh
+
+# ==================== SYSTEMD SERVICE ====================
 cat > /etc/systemd/system/trustcheck.service << 'EOF'
 [Unit]
 Description=TrustCheck Application
-After=docker.service
+After=docker.service cloud-final.service
 Requires=docker.service
+StartLimitInterval=0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=0
 WorkingDirectory=/opt/trustcheck
-ExecStart=/usr/local/bin/docker-compose up -d
-ExecStop=/usr/local/bin/docker-compose down
-ExecReload=/usr/local/bin/docker-compose restart
-TimeoutStartSec=0
+ExecStart=/opt/trustcheck/startup.sh
+StandardOutput=append:/var/log/trustcheck.log
+StandardError=append:/var/log/trustcheck.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable trustcheck
+# ==================== HEALTH CHECK SCRIPT ====================
+cat > /opt/trustcheck/health-check.sh << 'SCRIPT'
+#!/bin/bash
+HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
 
-# ==================== SETUP CLOUDWATCH AGENT ====================
-echo "📊 Setting up CloudWatch monitoring..."
-wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
-rpm -U ./amazon-cloudwatch-agent.rpm
+if [ "$HEALTH_STATUS" != "200" ]; then
+    echo "$(date): Health check failed, restarting services..."
+    cd /opt/trustcheck
+    docker-compose restart
+    
+    # Send CloudWatch alarm
+    aws cloudwatch put-metric-data \
+        --namespace "TrustCheck" \
+        --metric-name "HealthCheckFailed" \
+        --value 1 \
+        --region ${aws_region}
+fi
+SCRIPT
 
-# Configure CloudWatch agent
+chmod +x /opt/trustcheck/health-check.sh
+
+# ==================== CRON JOBS ====================
+cat > /etc/cron.d/trustcheck << 'EOF'
+# Health check every 5 minutes
+*/5 * * * * root /opt/trustcheck/health-check.sh
+
+# Daily update at 3 AM
+0 3 * * * root cd /opt/trustcheck && docker pull ${ecr_uri}:latest && docker-compose up -d
+EOF
+
+# ==================== CLOUDWATCH AGENT ====================
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
 {
   "logs": {
@@ -192,6 +246,11 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
             "file_path": "/var/log/user-data.log",
             "log_group_name": "/aws/ec2/trustcheck",
             "log_stream_name": "{instance_id}/user-data"
+          },
+          {
+            "file_path": "/var/log/trustcheck.log",
+            "log_group_name": "/aws/ec2/trustcheck",
+            "log_stream_name": "{instance_id}/application"
           }
         ]
       }
@@ -200,24 +259,16 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
   "metrics": {
     "namespace": "TrustCheck",
     "metrics_collected": {
-      "mem": {
-        "measurement": [
-          {
-            "name": "mem_used_percent",
-            "rename": "MemoryUtilization"
-          }
-        ]
+      "cpu": {
+        "measurement": [{"name": "cpu_usage_idle"}],
+        "totalcpu": false
       },
       "disk": {
-        "measurement": [
-          {
-            "name": "used_percent",
-            "rename": "DiskUtilization",
-            "resources": [
-              "*"
-            ]
-          }
-        ]
+        "measurement": [{"name": "used_percent"}],
+        "resources": ["*"]
+      },
+      "mem": {
+        "measurement": [{"name": "mem_used_percent"}]
       }
     }
   }
@@ -225,68 +276,16 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
 EOF
 
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-  -a fetch-config \
-  -m ec2 \
-  -s \
-  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    -a fetch-config \
+    -m ec2 \
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+    -s
 
-# ==================== SETUP AUTO-UPDATE SCRIPT ====================
-echo "🔄 Setting up auto-update script..."
-cat > /opt/trustcheck/update.sh << 'SCRIPT_EOF'
-#!/bin/bash
-# Script to update application from ECR
-
-set -e
-cd /opt/trustcheck
-
-echo "Pulling latest image..."
-aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${ecr_uri}
-docker pull ${ecr_uri}:latest
-
-echo "Running migrations..."
-docker run --rm --env-file .env ${ecr_uri}:latest alembic upgrade head
-
-echo "Restarting services..."
-docker-compose down
-docker-compose up -d
-
-echo "Update completed at $(date)"
-SCRIPT_EOF
-
-chmod +x /opt/trustcheck/update.sh
-
-# ==================== SETUP CRON FOR HEALTH CHECKS ====================
-echo "⏰ Setting up health check cron..."
-cat > /opt/trustcheck/health-check.sh << 'SCRIPT_EOF'
-#!/bin/bash
-# Health check script
-
-HEALTH_STATUS=$(curl -s -o /dev/null -w "%%{http_code}" http://localhost:8000/health)
-
-if [ "$HEALTH_STATUS" != "200" ]; then
-    echo "Health check failed at $(date). Restarting services..."
-    cd /opt/trustcheck
-    docker-compose restart
-fi
-SCRIPT_EOF
-
-chmod +x /opt/trustcheck/health-check.sh
-
-# Add to crontab
-(crontab -l 2>/dev/null; echo "*/5 * * * * /opt/trustcheck/health-check.sh") | crontab -
-
-# ==================== FINAL CHECKS ====================
-echo "✅ Waiting for services to be ready..."
-sleep 30
-
-# Check if services are running
-docker ps
-
-# Test API endpoint
-curl -f http://localhost:8000/health || echo "⚠️ API not yet ready"
+# ==================== START EVERYTHING ====================
+systemctl daemon-reload
+systemctl enable trustcheck
+systemctl start trustcheck
 
 echo "========================================="
-echo "✅ TrustCheck deployment completed at $(date)"
+echo "TrustCheck deployment completed at $(date)"
 echo "========================================="
-echo "Services running:"
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"

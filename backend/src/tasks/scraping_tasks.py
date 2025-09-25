@@ -154,7 +154,6 @@ async def _run_scraper_async(
                 source=source,
                 started_at=datetime.utcnow(),
                 status='RUNNING',
-                celery_task_id=task_id
             )
             session.add(scraper_run)
             await session.commit()
