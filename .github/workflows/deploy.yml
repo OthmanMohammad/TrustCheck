@@ -106,7 +106,7 @@ jobs:
         id: ec2
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=trustcheck-app" \
+            --filters "Name=tag:Name,Values=production-trustcheck-app" \
                       "Name=instance-state-name,Values=running" \
             --query "Reservations[0].Instances[0].InstanceId" \
             --output text)
@@ -148,7 +148,7 @@ jobs:
         run: |
           # Get ALB DNS
           ALB_DNS=$(aws elbv2 describe-load-balancers \
-            --names trustcheck-alb \
+           --names production-alb \
             --query "LoadBalancers[0].DNSName" \
             --output text)
           
