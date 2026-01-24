@@ -1,6 +1,6 @@
 [project]
 name = "trustcheck"
-version = "3.0.0"
+version = "4.0.0"
 description = "Sanctions screening and monitoring platform - Track OFAC, UN, EU, and UK sanctions lists"
 readme = "README.md"
 license = {text = "MIT"}
@@ -27,6 +27,7 @@ dependencies = [
 
     # Database
     "sqlalchemy>=2.0.36",
+    "asyncpg>=0.29.0",
     "aiosqlite>=0.20.0",
     "alembic>=1.14.0",
 

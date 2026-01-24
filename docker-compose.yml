@@ -1,32 +1,47 @@
 # TrustCheck Docker Compose
-# For local development and testing
+# Local development with PostgreSQL
 
 services:
-  trustcheck:
+  db:
+    image: postgres:16-alpine
+    container_name: trustcheck-db
+    environment:
+      POSTGRES_USER: trustcheck
+      POSTGRES_PASSWORD: trustcheck
+      POSTGRES_DB: trustcheck
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: trustcheck
+    container_name: trustcheck-app
     ports:
       - "8000:8000"
-    volumes:
-      # Persist SQLite database
-      - trustcheck_data:/app/data
-      # Mount source for development (optional)
-      # - ./src:/app/src:ro
     environment:
+      - DATABASE_URL=postgresql+asyncpg://trustcheck:trustcheck@db:5432/trustcheck
       - ENVIRONMENT=development
       - DEBUG=true
-      - DATABASE_URL=sqlite+aiosqlite:///data/trustcheck.db
       - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
-  trustcheck_data:
-    driver: local
+  postgres_data:
