@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Error - TrustCheck{% endblock %}
+
+{% block content %}
+<div style="text-align: center; padding: 4rem 2rem;">
+    <div style="font-size: 4rem; margin-bottom: 1rem;">⚠️</div>
+    <h1 style="font-size: 2rem; margin-bottom: 1rem;">{{ error or 'An error occurred' }}</h1>
+    <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+        Something went wrong. Please try again or contact support.
+    </p>
+    <a href="/" class="btn btn-primary">← Back to Dashboard</a>
+</div>
+{% endblock %}
