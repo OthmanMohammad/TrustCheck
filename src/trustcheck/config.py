@@ -51,7 +51,7 @@ class Settings(BaseSettings):
         default=3, description="Maximum retry attempts for failed requests"
     )
     scraping_user_agent: str = Field(
-        default="TrustCheck-Sanctions-Platform/3.0 (Compliance Monitoring)",
+        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         description="User agent for HTTP requests",
     )
 
