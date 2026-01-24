@@ -114,27 +114,29 @@ const TrustCheck = {
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
-    // Add click handlers for scraper buttons
-    document.querySelectorAll('[data-scrape]').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const source = btn.dataset.scrape;
-            btn.disabled = true;
-            btn.textContent = 'Starting...';
+    // Add click handlers for scraper buttons (skip on admin page - it has its own handler)
+    if (window.location.pathname !== '/admin') {
+        document.querySelectorAll('[data-scrape]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const source = btn.dataset.scrape;
+                btn.disabled = true;
+                btn.textContent = 'Starting...';
 
-            try {
-                await TrustCheck.triggerScraper(source);
-                btn.textContent = 'Started';
-            } catch (error) {
-                btn.textContent = 'Failed';
-            }
+                try {
+                    await TrustCheck.triggerScraper(source);
+                    btn.textContent = 'Started';
+                } catch (error) {
+                    btn.textContent = 'Failed';
+                }
 
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.textContent = `Scrape ${source}`;
-            }, 3000);
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = `Scrape ${source}`;
+                }, 3000);
+            });
         });
-    });
+    }
 
     // Add click handler for cache clear button
     const clearCacheBtn = document.querySelector('[data-clear-cache]');
