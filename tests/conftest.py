@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
+# Set test database URL BEFORE importing any trustcheck modules
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -20,6 +23,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Use in-memory SQLite for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+# Clear the settings cache and reset to use test database
+from trustcheck.config import get_settings
+get_settings.cache_clear()
+
+# Now import trustcheck to initialize with test settings
+from trustcheck import config
+# Force reload the settings singleton
+config.settings = get_settings()
 
 
 @pytest.fixture(scope="session")
