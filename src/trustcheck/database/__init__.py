@@ -7,6 +7,7 @@ Database connection, models, and repositories.
 from trustcheck.database.connection import (
     check_db_connection,
     close_db,
+    create_search_indexes,
     get_engine,
     get_session,
     get_session_context,
@@ -38,6 +39,7 @@ __all__ = [
     # Connection
     "check_db_connection",
     "close_db",
+    "create_search_indexes",
     "get_engine",
     "get_session",
     "get_session_context",
