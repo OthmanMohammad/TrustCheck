@@ -45,7 +45,7 @@ class EntityModel(Base):
     date_of_birth: Mapped[str | None] = mapped_column(String(20))
     year_of_birth: Mapped[int | None] = mapped_column(Integer)
     place_of_birth: Mapped[str | None] = mapped_column(String(255))
-    nationality: Mapped[str | None] = mapped_column(String(10))
+    nationality: Mapped[str | None] = mapped_column(String(255))
     remarks: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
@@ -100,7 +100,7 @@ class AddressModel(Base):
     entity_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    country: Mapped[str | None] = mapped_column(String(10))
+    country: Mapped[str | None] = mapped_column(String(255))
     city: Mapped[str | None] = mapped_column(String(255))
     street: Mapped[str | None] = mapped_column(String(500))
     postal_code: Mapped[str | None] = mapped_column(String(50))
@@ -121,7 +121,7 @@ class IdentifierModel(Base):
     )
     id_type: Mapped[str] = mapped_column(String(50), nullable=False)
     id_value: Mapped[str] = mapped_column(String(255), nullable=False)
-    country: Mapped[str | None] = mapped_column(String(10))
+    country: Mapped[str | None] = mapped_column(String(255))
     issue_date: Mapped[str | None] = mapped_column(String(20))
     expiry_date: Mapped[str | None] = mapped_column(String(20))
 
@@ -282,7 +282,7 @@ class BatchResultModel(Base):
     row_number: Mapped[int] = mapped_column(Integer, nullable=False)
     input_name: Mapped[str] = mapped_column(String(500), nullable=False)
     input_dob: Mapped[str | None] = mapped_column(String(20))
-    input_country: Mapped[str | None] = mapped_column(String(10))
+    input_country: Mapped[str | None] = mapped_column(String(255))
     has_match: Mapped[bool] = mapped_column(Boolean, default=False)
     best_match_score: Mapped[float | None] = mapped_column(Float)
     best_match_entity_id: Mapped[str | None] = mapped_column(String(36))
@@ -334,7 +334,7 @@ class WatchlistEntryModel(Base):
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     name_normalized: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     date_of_birth: Mapped[str | None] = mapped_column(String(20))
-    country: Mapped[str | None] = mapped_column(String(10))
+    country: Mapped[str | None] = mapped_column(String(255))
     reference_id: Mapped[str | None] = mapped_column(String(255))  # External reference
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
