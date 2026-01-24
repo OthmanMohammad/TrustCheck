@@ -207,8 +207,10 @@ class TestNameMatcher:
 
     def test_is_match_with_threshold(self):
         """Test is_match with custom threshold."""
+        # Jon is a variant of John, so they match at high score
         assert is_match("Jon Smith", "John Smith", threshold=0.7)
-        assert not is_match("Jon Smith", "John Smith", threshold=0.99)
+        # These names are similar but not variants, should NOT match at very high threshold
+        assert not is_match("James Wilson", "James Williams", threshold=0.99)
 
     def test_find_matches(self):
         """Test finding matches from a list."""
