@@ -1,22 +1,35 @@
 # Fly.io Configuration for TrustCheck
 # https://fly.io/docs/reference/configuration/
+#
+# Deploy with:
+#   fly launch --name trustcheck-app
+#   fly secrets set DATABASE_URL="postgresql+asyncpg://...neon-url..."
+#   fly deploy
+#   fly ssh console -C "alembic upgrade head"
 
-# Application name (change this to your unique app name)
 app = "trustcheck-sanctions"
-primary_region = "iad"  # US East (Washington, D.C.)
+primary_region = "iad"  # US East - choose closest to your Neon region
 
-# Build configuration
 [build]
   dockerfile = "Dockerfile"
 
-# Environment variables
 [env]
   ENVIRONMENT = "production"
   LOG_LEVEL = "INFO"
   PYTHONUNBUFFERED = "1"
-  DATABASE_URL = "sqlite+aiosqlite:///data/trustcheck.db"
+  # DATABASE_URL is set via secrets (fly secrets set DATABASE_URL="...")
+  # Pool settings optimized for serverless PostgreSQL (Neon)
+  DB_POOL_SIZE = "5"
+  DB_POOL_MAX_OVERFLOW = "10"
+  # Screening settings
+  DEFAULT_MATCH_THRESHOLD = "0.80"
+  BATCH_SCREENING_LIMIT = "10000"
+  # Scraping intervals
+  OFAC_INTERVAL_HOURS = "6"
+  UN_INTERVAL_HOURS = "24"
+  EU_INTERVAL_HOURS = "24"
+  UK_INTERVAL_HOURS = "24"
 
-# HTTP service configuration
 [http_service]
   internal_port = 8000
   force_https = true
@@ -25,38 +38,26 @@ primary_region = "iad"  # US East (Washington, D.C.)
   min_machines_running = 0
   processes = ["app"]
 
-  # Health check
   [http_service.concurrency]
     type = "requests"
     hard_limit = 100
     soft_limit = 80
 
-# Machine configuration (free tier uses shared-cpu-1x)
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+# Machine configuration (free tier compatible)
 [[vm]]
-  memory = "256mb"
+  memory = "512mb"
   cpu_kind = "shared"
   cpus = 1
 
-# Persistent storage for SQLite database
-[mounts]
-  source = "trustcheck_data"
-  destination = "/app/data"
-  initial_size = "1gb"
+[deploy]
+  release_command = "alembic upgrade head"
 
-# Health checks
-[[services.http_checks]]
-  interval = "30s"
-  timeout = "10s"
-  grace_period = "10s"
-  method = "GET"
-  path = "/health"
-
-# Restart policy
-[restart]
-  policy = "always"
-  max_retries = 3
-
-# Metrics (optional, disabled for free tier)
-# [metrics]
-#   port = 9091
-#   path = "/metrics"
+[processes]
+  app = "python -m trustcheck.main serve --host 0.0.0.0 --port 8000"

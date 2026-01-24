@@ -207,6 +207,48 @@ docker run -p 8000:8000 \
   trustcheck
 ```
 
+## Free Cloud Deployment
+
+Deploy TrustCheck for **$0/month** using:
+
+| Service | Purpose | Free Tier |
+|---------|---------|-----------|
+| [Neon](https://neon.tech) | PostgreSQL | 0.5 GB, serverless |
+| [Render](https://render.com) | Web hosting | 750 hrs/month |
+
+### Quick Deploy
+
+1. **Create Neon database** at [neon.tech](https://neon.tech)
+   - Enable `pg_trgm` extension: `CREATE EXTENSION IF NOT EXISTS pg_trgm;`
+   - Copy connection string
+
+2. **Deploy to Render**
+   - Fork this repo to your GitHub
+   - Create new Web Service at [render.com](https://render.com)
+   - Set `DATABASE_URL` to your Neon connection string (change `postgresql://` to `postgresql+asyncpg://`)
+   - Set start command: `sh -c 'alembic upgrade head && python -m trustcheck.main serve --host 0.0.0.0 --port $PORT'`
+
+3. **Trigger initial scrape**
+   ```bash
+   curl -X POST https://your-app.onrender.com/api/admin/scrape/all
+   ```
+
+See [docs/FREE_DEPLOYMENT.md](docs/FREE_DEPLOYMENT.md) for detailed instructions.
+
+### Alternative: Fly.io
+
+```bash
+fly launch --name my-trustcheck
+fly secrets set DATABASE_URL="postgresql+asyncpg://...neon-url..."
+fly deploy
+```
+
+## CI/CD
+
+GitHub Actions workflows included:
+- **CI Pipeline** (`.github/workflows/ci.yml`) - Lint, test, build on every push
+- **Scheduled Scrape** (`.github/workflows/scheduled-scrape.yml`) - External cron for free-tier deployments
+
 ## License
 
 MIT

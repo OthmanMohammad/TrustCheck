@@ -1,0 +1,55 @@
+# Render Blueprint for TrustCheck
+# https://render.com/docs/blueprint-spec
+#
+# Deploy with: https://render.com/deploy?repo=your-repo-url
+#
+# NOTE: For completely FREE deployment, use Neon PostgreSQL instead of
+# Render's PostgreSQL (which is only free for 90 days).
+# See docs/FREE_DEPLOYMENT.md for setup instructions.
+
+services:
+  - type: web
+    name: trustcheck
+    runtime: docker
+    region: oregon  # or frankfurt, singapore, ohio
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DEBUG
+        value: false
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8000
+      # Database URL - Set this to your Neon PostgreSQL connection string
+      # Format: postgresql+asyncpg://user:password@host/database?sslmode=require
+      - key: DATABASE_URL
+        sync: false  # Will prompt during setup
+      # Pool settings optimized for serverless PostgreSQL
+      - key: DB_POOL_SIZE
+        value: 5
+      - key: DB_POOL_MAX_OVERFLOW
+        value: 10
+      # Screening settings
+      - key: DEFAULT_MATCH_THRESHOLD
+        value: 0.80
+      - key: BATCH_SCREENING_LIMIT
+        value: 10000
+      # Scraping intervals (hours)
+      - key: OFAC_INTERVAL_HOURS
+        value: 6
+      - key: UN_INTERVAL_HOURS
+        value: 24
+      - key: EU_INTERVAL_HOURS
+        value: 24
+      - key: UK_INTERVAL_HOURS
+        value: 24
+    buildCommand: ""
+    startCommand: "sh -c 'alembic upgrade head && python -m trustcheck.main serve --host 0.0.0.0 --port $PORT'"
+    autoDeploy: true
