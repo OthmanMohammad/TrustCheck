@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - TrustCheck{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <p>Sanctions monitoring overview</p>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total Entities</div>
+        <div class="stat-value">{{ "{:,}".format(stats.total_entities) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Active Entities</div>
+        <div class="stat-value">{{ "{:,}".format(stats.active_entities) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Changes (24h)</div>
+        <div class="stat-value">{{ stats.changes_last_24h }}</div>
+        {% if stats.changes_last_24h > 0 %}
+        <div class="stat-change positive">+{{ stats.changes_last_24h }} new</div>
+        {% endif %}
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Changes (7d)</div>
+        <div class="stat-value">{{ stats.changes_last_7d }}</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Entities by Source -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Entities by Source</h3>
+        </div>
+        <div class="card-body">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Count</th>
+                        <th>Last Update</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for source, count in stats.entities_by_source.items() %}
+                    <tr>
+                        <td><strong>{{ source }}</strong></td>
+                        <td>{{ "{:,}".format(count) }}</td>
+                        <td>
+                            {% if stats.last_scrape_times.get(source) %}
+                                {{ stats.last_scrape_times[source].strftime('%Y-%m-%d %H:%M') }}
+                            {% else %}
+                                Never
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% set status = stats.scraper_statuses.get(source, 'UNKNOWN') %}
+                            {% if status == 'SUCCESS' %}
+                                <span class="status-dot success"></span>Success
+                            {% elif status == 'RUNNING' %}
+                                <span class="status-dot running"></span>Running
+                            {% elif status == 'FAILED' %}
+                                <span class="status-dot danger"></span>Failed
+                            {% else %}
+                                <span class="status-dot warning"></span>{{ status }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="empty-state">No data yet. Run a scrape to get started.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Entities by Type -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Entities by Type</h3>
+        </div>
+        <div class="card-body">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Count</th>
+                        <th>Percentage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for type, count in stats.entities_by_type.items() %}
+                    <tr>
+                        <td>
+                            {% if type == 'INDIVIDUAL' %}
+                                👤 Individual
+                            {% elif type == 'ORGANIZATION' %}
+                                🏢 Organization
+                            {% elif type == 'VESSEL' %}
+                                🚢 Vessel
+                            {% elif type == 'AIRCRAFT' %}
+                                ✈️ Aircraft
+                            {% else %}
+                                ❓ {{ type }}
+                            {% endif %}
+                        </td>
+                        <td>{{ "{:,}".format(count) }}</td>
+                        <td>
+                            {% if stats.active_entities > 0 %}
+                                {{ "%.1f"|format(count / stats.active_entities * 100) }}%
+                            {% else %}
+                                0%
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="3" class="empty-state">No data available</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>Quick Actions</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <a href="/screening" class="btn btn-primary btn-lg">
+                🔍 Screen a Name
+            </a>
+            <a href="/entities" class="btn btn-secondary btn-lg">
+                📋 Browse Entities
+            </a>
+            <a href="/changes" class="btn btn-secondary btn-lg">
+                📊 View Changes
+            </a>
+            <a href="/admin" class="btn btn-secondary btn-lg">
+                ⚙️ Admin Panel
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
