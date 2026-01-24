@@ -78,13 +78,17 @@ class ScreeningService:
                 continue
 
             # Build match result
+            # Note: matched_name is the specific name/alias that matched
+            # entity.primary_name might be different if match was on an alias
+            is_alias_match = matched_name.upper() != entity.primary_name.upper()
+
             match = ScreeningMatch(
                 entity=entity,
                 score=score.overall_score,
                 match_type=score.match_type,
                 matched_fields=[
                     MatchedField(
-                        field_name="name",
+                        field_name="name" if not is_alias_match else "alias",
                         query_value=request.name,
                         matched_value=matched_name,
                         score=score.overall_score,
@@ -93,6 +97,18 @@ class ScreeningService:
                 ],
                 sources=self._get_entity_sources(entity),
             )
+
+            # If matched on alias, add info about which alias matched
+            if is_alias_match:
+                match.matched_fields.append(
+                    MatchedField(
+                        field_name="primary_name",
+                        query_value=request.name,
+                        matched_value=entity.primary_name,
+                        score=0.0,  # Not scored, just informational
+                        match_type=MatchType.NONE,
+                    )
+                )
 
             # Apply secondary attribute boosts
             if request.date_of_birth and entity.date_of_birth:

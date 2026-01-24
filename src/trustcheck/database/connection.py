@@ -2,6 +2,9 @@
 TrustCheck Database Connection.
 
 Async SQLAlchemy database connection management for SQLite.
+
+WARNING: SQLite has fundamental limitations for concurrent writes.
+For production with high concurrency, use PostgreSQL instead!
 """
 
 import logging
@@ -15,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from trustcheck.config import settings
 
@@ -29,31 +33,55 @@ def get_engine() -> AsyncEngine:
     """Get or create the database engine."""
     global _engine
     if _engine is None:
-        _engine = create_async_engine(
-            settings.database_url,
-            echo=settings.debug,
-            future=True,
-            # SQLite specific settings
-            connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
-        )
+        is_sqlite = "sqlite" in settings.database_url
 
-        # Enable SQLite optimizations
-        if "sqlite" in settings.database_url:
+        if is_sqlite:
+            # SQLite: Use NullPool to avoid connection pooling issues
+            # Each operation gets a fresh connection, avoiding locks
+            _engine = create_async_engine(
+                settings.database_url,
+                echo=settings.debug,
+                future=True,
+                poolclass=NullPool,  # No pooling - fresh connection each time
+                connect_args={
+                    "check_same_thread": False,
+                    "timeout": 60,  # Wait up to 60 seconds for locks
+                },
+            )
 
             @event.listens_for(_engine.sync_engine, "connect")
             def set_sqlite_pragma(dbapi_connection, connection_record):  # type: ignore
                 cursor = dbapi_connection.cursor()
                 # Enable foreign keys
                 cursor.execute("PRAGMA foreign_keys=ON")
-                # Use WAL mode for better concurrency
+                # WAL mode allows concurrent reads during writes
                 cursor.execute("PRAGMA journal_mode=WAL")
-                # Increase cache size (negative = KB)
+                # Larger cache (64MB)
                 cursor.execute("PRAGMA cache_size=-64000")
-                # Synchronous mode for balance of safety and speed
+                # NORMAL sync is faster, still safe with WAL
                 cursor.execute("PRAGMA synchronous=NORMAL")
-                # Increase busy timeout
-                cursor.execute("PRAGMA busy_timeout=5000")
+                # 60 second busy timeout
+                cursor.execute("PRAGMA busy_timeout=60000")
+                # Temp tables in memory
+                cursor.execute("PRAGMA temp_store=MEMORY")
+                # Memory-mapped I/O (256MB)
+                cursor.execute("PRAGMA mmap_size=268435456")
                 cursor.close()
+
+            logger.warning(
+                "Using SQLite database. This has concurrency limitations. "
+                "For production, consider using PostgreSQL."
+            )
+        else:
+            # PostgreSQL or other databases with proper connection pooling
+            _engine = create_async_engine(
+                settings.database_url,
+                echo=settings.debug,
+                future=True,
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True,
+            )
 
         logger.info(f"Database engine created: {settings.database_url}")
 

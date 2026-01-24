@@ -115,6 +115,8 @@ class MatchType(str, Enum):
     PHONETIC = "PHONETIC"
     FUZZY = "FUZZY"
     PARTIAL = "PARTIAL"
+    VARIANT = "VARIANT"  # Nickname/variant match (Bob/Robert)
+    NONE = "NONE"  # Informational field, not a match
 
 
 class Script(str, Enum):
