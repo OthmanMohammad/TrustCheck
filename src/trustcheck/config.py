@@ -102,12 +102,12 @@ class Settings(BaseSettings):
         description="UN Consolidated sanctions list URL",
     )
     eu_sanctions_url: str = Field(
-        default="https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content",
+        default="https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw",
         description="EU sanctions list URL",
     )
     uk_sanctions_url: str = Field(
-        default="https://assets.publishing.service.gov.uk/media/65d12cd4cf7eb1001ab5c225/UK_Sanctions_List.ods",
-        description="UK sanctions list URL",
+        default="https://assets.publishing.service.gov.uk/media/662119c877a30aa0c4757e96/UK_Sanctions_List.xml",
+        description="UK sanctions list URL (static XML)",
     )
 
     @computed_field  # type: ignore[prop-decorator]
