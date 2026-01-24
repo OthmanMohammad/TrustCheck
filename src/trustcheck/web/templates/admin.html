@@ -334,10 +334,15 @@
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 5;
     const tasks = new Map();
+    const activeScrapes = new Set(); // Track which sources are being scraped
 
     function connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/progress`;
+
+        // Clear old tasks on reconnect to prevent duplicates
+        tasks.clear();
+        renderTasks();
 
         ws = new WebSocket(wsUrl);
 
@@ -367,6 +372,9 @@
 
             // Ignore ping messages
             if (data.type === 'ping') return;
+
+            // Validate that we have the required fields
+            if (!data.task_id || !data.task_name) return;
 
             handleProgressUpdate(data);
         };
@@ -490,7 +498,20 @@
     function removeButtonLoading() {
         document.querySelectorAll('.btn.loading').forEach(btn => {
             btn.classList.remove('loading');
+            btn.disabled = false;
         });
+        activeScrapes.clear();
+    }
+
+    function isSourceRunning(source) {
+        // Check if any task matches this source
+        for (const [taskId, task] of tasks) {
+            if (task.task_name && task.task_name.includes(source) &&
+                (task.status === 'running' || task.status === 'pending')) {
+                return true;
+            }
+        }
+        return activeScrapes.has(source);
     }
 
     // Initialize WebSocket on page load
@@ -501,7 +522,21 @@
         document.querySelectorAll('[data-scrape]').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const source = btn.dataset.scrape;
+
+                // Prevent duplicate scrapes
+                if (btn.classList.contains('loading') || btn.disabled) {
+                    return;
+                }
+
+                // Check if already running
+                if (source !== 'ALL' && isSourceRunning(source)) {
+                    alert(`${source} scrape is already running`);
+                    return;
+                }
+
                 btn.classList.add('loading');
+                btn.disabled = true;
+                activeScrapes.add(source);
 
                 try {
                     const url = source === 'ALL' ? '/api/admin/scrape/all' : '/api/admin/scrape';
@@ -524,6 +559,8 @@
                     console.error('Error triggering scrape:', error);
                     alert('Failed to trigger scrape: ' + error.message);
                     btn.classList.remove('loading');
+                    btn.disabled = false;
+                    activeScrapes.delete(source);
                 }
             });
         });
@@ -531,7 +568,10 @@
         // Clear cache button
         document.querySelector('[data-clear-cache]').addEventListener('click', async () => {
             const btn = document.querySelector('[data-clear-cache]');
+            if (btn.disabled) return;
+
             btn.classList.add('loading');
+            btn.disabled = true;
 
             try {
                 const response = await fetch('/api/admin/cache/clear', { method: 'POST' });
@@ -543,6 +583,7 @@
                 alert('Failed to clear cache: ' + error.message);
             } finally {
                 btn.classList.remove('loading');
+                btn.disabled = false;
             }
         });
     });
