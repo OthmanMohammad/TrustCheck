@@ -1,19 +1,19 @@
 """
 TrustCheck Screening Service.
 
-Provides name screening against sanctions lists with fuzzy matching.
+Enterprise-grade name screening against sanctions lists.
+Uses PostgreSQL pg_trgm for efficient fuzzy matching at database level.
 """
 
+import json
 import logging
 import time
 from datetime import datetime
-from functools import lru_cache
 from uuid import uuid4
 
-from cachetools import TTLCache
-
 from trustcheck.config import settings
-from trustcheck.database import EntityRepository, get_session_context
+from trustcheck.database import get_session_context
+from trustcheck.database.search import DatabaseSearch, SearchCandidate
 from trustcheck.domain import (
     DataSource,
     MatchedField,
@@ -27,14 +27,14 @@ from trustcheck.matching import MatchScore, NameMatcher, normalize_name
 
 logger = logging.getLogger(__name__)
 
-# Cache for name data - refreshes every 5 minutes
-_name_cache: TTLCache[str, list[tuple[str, str, str]]] = TTLCache(
-    maxsize=1, ttl=settings.cache_ttl_seconds
-)
-
 
 class ScreeningService:
-    """Service for screening names against sanctions lists."""
+    """
+    Enterprise screening service.
+
+    Uses database-level trigram search for candidate generation,
+    then applies detailed scoring on top candidates.
+    """
 
     def __init__(self) -> None:
         self.matcher = NameMatcher(default_threshold=settings.default_match_threshold)
@@ -42,6 +42,10 @@ class ScreeningService:
     async def screen(self, request: ScreeningRequest) -> ScreeningResult:
         """
         Screen a single name against sanctions lists.
+
+        Two-stage approach:
+        1. Database-level trigram search for candidate generation
+        2. Detailed scoring on candidates using multiple algorithms
 
         Args:
             request: Screening request with name and options
@@ -51,99 +55,30 @@ class ScreeningService:
         """
         start_time = time.time()
 
-        # Get all names from cache or database
-        all_names = await self._get_all_names(request.include_inactive)
+        # Stage 1: Database-level candidate generation
+        async with get_session_context() as session:
+            db_search = DatabaseSearch(session)
 
-        # Find matches
-        matches = self.matcher.find_matches(
-            query=request.name,
-            candidates=all_names,
-            threshold=request.threshold,
-            max_results=request.max_results,
-        )
-
-        # Convert to ScreeningMatch objects
-        screening_matches = []
-        matched_entity_ids = set()
-
-        for entity_id, matched_name, score in matches:
-            # Skip duplicates (same entity matched via different names)
-            if entity_id in matched_entity_ids:
-                continue
-            matched_entity_ids.add(entity_id)
-
-            # Get full entity details
-            entity = await self._get_entity(entity_id)
-            if not entity:
-                continue
-
-            # Build match result
-            # Note: matched_name is the specific name/alias that matched
-            # entity.primary_name might be different if match was on an alias
-            is_alias_match = matched_name.upper() != entity.primary_name.upper()
-
-            match = ScreeningMatch(
-                entity=entity,
-                score=score.overall_score,
-                match_type=score.match_type,
-                matched_fields=[
-                    MatchedField(
-                        field_name="name" if not is_alias_match else "alias",
-                        query_value=request.name,
-                        matched_value=matched_name,
-                        score=score.overall_score,
-                        match_type=score.match_type,
-                    )
-                ],
-                sources=self._get_entity_sources(entity),
+            # Get candidates using trigram similarity
+            candidates = await db_search.search_names(
+                query=request.name,
+                threshold=settings.trigram_similarity_threshold,
+                limit=settings.max_screening_results * 2,  # Get extra for filtering
+                active_only=not request.include_inactive,
+                entity_types=request.entity_types if hasattr(request, 'entity_types') else None,
+                sources=request.sources if hasattr(request, 'sources') else None,
             )
 
-            # If matched on alias, add info about which alias matched
-            if is_alias_match:
-                match.matched_fields.append(
-                    MatchedField(
-                        field_name="primary_name",
-                        query_value=request.name,
-                        matched_value=entity.primary_name,
-                        score=0.0,  # Not scored, just informational
-                        match_type=MatchType.NONE,
-                    )
-                )
+        # Stage 2: Detailed scoring on candidates
+        screening_matches = await self._score_candidates(request, candidates)
 
-            # Apply secondary attribute boosts
-            if request.date_of_birth and entity.date_of_birth:
-                if str(request.date_of_birth) == str(entity.date_of_birth):
-                    match.score = min(1.0, match.score + 0.10)
-                    match.matched_fields.append(
-                        MatchedField(
-                            field_name="date_of_birth",
-                            query_value=str(request.date_of_birth),
-                            matched_value=str(entity.date_of_birth),
-                            score=1.0,
-                            match_type=MatchType.EXACT,
-                        )
-                    )
+        # Apply threshold filter
+        threshold = request.threshold or settings.default_match_threshold
+        screening_matches = [m for m in screening_matches if m.score >= threshold]
 
-            if request.country and entity.nationality:
-                if request.country.upper() == entity.nationality.upper():
-                    match.score = min(1.0, match.score + 0.05)
-                    match.matched_fields.append(
-                        MatchedField(
-                            field_name="nationality",
-                            query_value=request.country,
-                            matched_value=entity.nationality,
-                            score=1.0,
-                            match_type=MatchType.EXACT,
-                        )
-                    )
-
-            screening_matches.append(match)
-
-        # Sort by final score
+        # Sort by score and limit
         screening_matches.sort(key=lambda m: m.score, reverse=True)
-
-        # Limit results
-        screening_matches = screening_matches[: request.max_results]
+        screening_matches = screening_matches[:request.max_results]
 
         processing_time = (time.time() - start_time) * 1000
 
@@ -153,6 +88,177 @@ class ScreeningService:
             screened_at=datetime.utcnow(),
             processing_time_ms=processing_time,
         )
+
+    async def _score_candidates(
+        self,
+        request: ScreeningRequest,
+        candidates: list[SearchCandidate],
+    ) -> list[ScreeningMatch]:
+        """
+        Apply detailed scoring to database candidates.
+
+        Uses multiple algorithms: fuzzy matching, phonetic, n-gram, etc.
+        """
+        matches: list[ScreeningMatch] = []
+        seen_entities: set[str] = set()
+
+        for candidate in candidates:
+            # Skip duplicate entities (matched via different names)
+            if candidate.entity_id in seen_entities:
+                continue
+            seen_entities.add(candidate.entity_id)
+
+            # Calculate detailed score
+            score = self.matcher.score(request.name, candidate.name_value)
+
+            # Determine if this was an alias match
+            is_alias_match = candidate.name_value.upper() != candidate.primary_name.upper()
+
+            # Build matched fields
+            matched_fields = [
+                MatchedField(
+                    field_name="alias" if is_alias_match else "name",
+                    query_value=request.name,
+                    matched_value=candidate.name_value,
+                    score=score.overall_score,
+                    match_type=score.match_type,
+                )
+            ]
+
+            # If matched on alias, add primary name info
+            if is_alias_match:
+                matched_fields.append(
+                    MatchedField(
+                        field_name="primary_name",
+                        query_value=request.name,
+                        matched_value=candidate.primary_name,
+                        score=0.0,
+                        match_type=MatchType.NONE,
+                    )
+                )
+
+            # Get sources for this entity
+            sources = await self._get_entity_sources(candidate.entity_id)
+
+            # Create entity object
+            entity = SanctionedEntity(
+                id=candidate.entity_id,
+                primary_name=candidate.primary_name,
+                entity_type=candidate.entity_type,
+                nationality=candidate.nationality,
+                date_of_birth=candidate.date_of_birth,
+            )
+
+            # Build screening match
+            match = ScreeningMatch(
+                entity=entity,
+                score=score.overall_score,
+                match_type=score.match_type,
+                matched_fields=matched_fields,
+                sources=sources,
+            )
+
+            # Apply secondary attribute boosts
+            match = self._apply_attribute_boosts(request, match, candidate)
+
+            matches.append(match)
+
+        return matches
+
+    def _apply_attribute_boosts(
+        self,
+        request: ScreeningRequest,
+        match: ScreeningMatch,
+        candidate: SearchCandidate,
+    ) -> ScreeningMatch:
+        """Apply score boosts for matching secondary attributes."""
+        # Date of birth boost
+        if request.date_of_birth and candidate.date_of_birth:
+            if str(request.date_of_birth) == str(candidate.date_of_birth):
+                match.score = min(1.0, match.score + 0.10)
+                match.matched_fields.append(
+                    MatchedField(
+                        field_name="date_of_birth",
+                        query_value=str(request.date_of_birth),
+                        matched_value=str(candidate.date_of_birth),
+                        score=1.0,
+                        match_type=MatchType.EXACT,
+                    )
+                )
+
+        # Country/nationality boost
+        if request.country and candidate.nationality:
+            if request.country.upper() == candidate.nationality.upper():
+                match.score = min(1.0, match.score + 0.05)
+                match.matched_fields.append(
+                    MatchedField(
+                        field_name="nationality",
+                        query_value=request.country,
+                        matched_value=candidate.nationality,
+                        score=1.0,
+                        match_type=MatchType.EXACT,
+                    )
+                )
+
+        return match
+
+    async def _get_entity_sources(self, entity_id: str) -> list[DataSource]:
+        """Get data sources for an entity."""
+        async with get_session_context() as session:
+            from sqlalchemy import text
+            result = await session.execute(
+                text("""
+                    SELECT DISTINCT source FROM source_records
+                    WHERE entity_id = :entity_id AND is_active = true
+                """) if settings.is_postgresql else
+                text("""
+                    SELECT DISTINCT source FROM source_records
+                    WHERE entity_id = :entity_id AND is_active = 1
+                """),
+                {"entity_id": entity_id}
+            )
+            rows = result.fetchall()
+
+        sources = []
+        for row in rows:
+            try:
+                sources.append(DataSource(row[0]))
+            except ValueError:
+                pass
+
+        return sources if sources else [DataSource.OFAC_SDN]
+
+    async def screen_name(
+        self,
+        name: str,
+        date_of_birth: str | None = None,
+        country: str | None = None,
+        threshold: float | None = None,
+        max_results: int = 10,
+    ) -> list[ScreeningMatch]:
+        """
+        Convenience method for simple name screening.
+
+        Args:
+            name: Name to screen
+            date_of_birth: Optional DOB for boost
+            country: Optional country for boost
+            threshold: Minimum match score
+            max_results: Maximum results
+
+        Returns:
+            List of ScreeningMatch objects
+        """
+        request = ScreeningRequest(
+            name=name,
+            date_of_birth=date_of_birth,
+            country=country,
+            threshold=threshold or settings.default_match_threshold,
+            max_results=max_results,
+        )
+
+        result = await self.screen(request)
+        return result.matches
 
     async def screen_batch(
         self,
@@ -173,7 +279,7 @@ class ScreeningService:
         """
         results = {}
 
-        for name in names[: settings.batch_screening_limit]:
+        for name in names[:settings.batch_screening_limit]:
             request = ScreeningRequest(
                 name=name,
                 threshold=threshold or settings.default_match_threshold,
@@ -183,59 +289,34 @@ class ScreeningService:
 
         return results
 
-    async def _get_all_names(self, include_inactive: bool = False) -> list[tuple[str, str, str]]:
+    async def get_entity_details(self, entity_id: str) -> dict | None:
         """
-        Get all entity names for matching.
+        Get full details for an entity.
 
-        Returns cached data if available, otherwise loads from database.
+        Returns all names, addresses, identifiers, sources.
         """
-        cache_key = f"names_{include_inactive}"
-
-        if cache_key in _name_cache:
-            return _name_cache[cache_key]
-
         async with get_session_context() as session:
-            entity_repo = EntityRepository(session)
-            names = await entity_repo.get_all_normalized_names(active_only=not include_inactive)
+            db_search = DatabaseSearch(session)
+            return await db_search.get_entity_with_details(entity_id)
 
-        _name_cache[cache_key] = names
-        logger.info(f"Loaded {len(names)} names into cache")
+    async def search_by_identifier(
+        self,
+        id_type: str,
+        id_value: str,
+    ) -> list[dict]:
+        """
+        Search for entities by identifier.
 
-        return names
+        Args:
+            id_type: Type of identifier (PASSPORT, NATIONAL_ID, etc.)
+            id_value: The identifier value
 
-    async def _get_entity(self, entity_id: str) -> SanctionedEntity | None:
-        """Get full entity details by ID."""
+        Returns:
+            List of matching entity details
+        """
         async with get_session_context() as session:
-            entity_repo = EntityRepository(session)
-            return await entity_repo.get_by_id(entity_id)
-
-    def _get_entity_sources(self, entity: SanctionedEntity) -> list[DataSource]:
-        """Get list of sources for an entity (from programs)."""
-        sources = []
-
-        # Infer sources from programs
-        for program in entity.programs:
-            program_upper = program.upper()
-
-            if any(p in program_upper for p in ["OFAC", "SDN", "SDGT", "IRAN", "SYRIA", "CUBA"]):
-                if DataSource.OFAC_SDN not in sources:
-                    sources.append(DataSource.OFAC_SDN)
-            elif any(p in program_upper for p in ["UN", "ISIL", "QAIDA", "TALIBAN"]):
-                if DataSource.UN not in sources:
-                    sources.append(DataSource.UN)
-            elif any(p in program_upper for p in ["EU", "EUROP"]):
-                if DataSource.EU not in sources:
-                    sources.append(DataSource.EU)
-            elif any(p in program_upper for p in ["UK", "BRIT"]):
-                if DataSource.UK not in sources:
-                    sources.append(DataSource.UK)
-
-        return sources if sources else [DataSource.OFAC_SDN]  # Default fallback
-
-    def clear_cache(self) -> None:
-        """Clear the name cache to force reload from database."""
-        _name_cache.clear()
-        logger.info("Screening cache cleared")
+            db_search = DatabaseSearch(session)
+            return await db_search.search_by_identifier(id_type, id_value)
 
 
 # Global service instance
@@ -248,3 +329,9 @@ def get_screening_service() -> ScreeningService:
     if _screening_service is None:
         _screening_service = ScreeningService()
     return _screening_service
+
+
+def clear_screening_service() -> None:
+    """Clear the global screening service (for testing)."""
+    global _screening_service
+    _screening_service = None
