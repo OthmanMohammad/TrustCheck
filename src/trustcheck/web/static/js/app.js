@@ -115,7 +115,7 @@ const TrustCheck = {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
     // Add click handlers for scraper buttons (skip on admin page - it has its own handler)
-    if (window.location.pathname !== '/admin') {
+    if (window.location.pathname !== '/ui/admin') {
         document.querySelectorAll('[data-scrape]').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.preventDefault();
