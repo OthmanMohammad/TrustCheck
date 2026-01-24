@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Screening - TrustCheck{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Name Screening</h1>
+    <p>Screen names against international sanctions lists</p>
+</div>
+
+<!-- Screening Form -->
+<div class="card screening-form">
+    <div class="card-body">
+        <form method="post" id="screening-form">
+            <div class="form-group">
+                <label class="form-label">Name to Screen</label>
+                <input type="text" name="name" class="form-input" placeholder="Enter a name to screen..."
+                       value="{{ name if name else '' }}" required autofocus>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Match Threshold</label>
+                <select name="threshold" class="form-input form-select">
+                    <option value="0.7" {% if threshold == 0.7 %}selected{% endif %}>70% - More results, more false positives</option>
+                    <option value="0.8" {% if threshold == 0.8 or not threshold %}selected{% endif %}>80% - Balanced (Recommended)</option>
+                    <option value="0.9" {% if threshold == 0.9 %}selected{% endif %}>90% - Fewer results, higher accuracy</option>
+                    <option value="0.95" {% if threshold == 0.95 %}selected{% endif %}>95% - Near exact matches only</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg" style="width: 100%;">
+                🔍 Screen Name
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Results -->
+{% if results %}
+<div class="card">
+    <div class="card-header">
+        <h3>Screening Results for "{{ name }}"</h3>
+    </div>
+    <div class="card-body">
+        {% if results.matches %}
+        <div class="alert alert-warning">
+            Found {{ results.matches|length }} potential match(es) above {{ "%.0f"|format(threshold * 100) }}% threshold
+        </div>
+
+        {% for match in results.matches %}
+        <div class="match-result {% if match.score >= 0.9 %}high-score{% elif match.score >= 0.8 %}medium-score{% endif %}">
+            <div class="match-header">
+                <div>
+                    <div class="match-name">{{ match.entity.primary_name }}</div>
+                    <div class="match-details">
+                        {{ match.entity.entity_type.value }} |
+                        Match type: {{ match.match_type.value }}
+                    </div>
+                </div>
+                <div class="match-score {% if match.score >= 0.9 %}high{% elif match.score >= 0.8 %}medium{% else %}low{% endif %}">
+                    {{ "%.1f"|format(match.score * 100) }}%
+                </div>
+            </div>
+
+            {% if match.entity.programs %}
+            <div class="match-programs">
+                {% for program in match.entity.programs[:5] %}
+                <span class="badge badge-danger">{{ program }}</span>
+                {% endfor %}
+                {% if match.entity.programs|length > 5 %}
+                <span class="badge badge-secondary">+{{ match.entity.programs|length - 5 }} more</span>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <div style="margin-top: 0.75rem;">
+                <a href="/entities/{{ match.entity.id }}" class="btn btn-sm btn-secondary">View Details</a>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+            Processed in {{ "%.2f"|format(results.processing_time_ms) }}ms
+        </div>
+        {% else %}
+        <div class="alert alert-success">
+            ✅ No matches found above {{ "%.0f"|format(threshold * 100) }}% threshold. This name does not appear to match any sanctioned entities.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Instructions -->
+{% if not results %}
+<div class="card" style="margin-top: 2rem;">
+    <div class="card-header">
+        <h3>How Screening Works</h3>
+    </div>
+    <div class="card-body">
+        <p>Our screening engine uses multiple algorithms to find potential matches:</p>
+        <ul style="margin: 1rem 0; padding-left: 1.5rem;">
+            <li><strong>Exact matching</strong> - Direct name comparison</li>
+            <li><strong>Fuzzy matching</strong> - Catches typos and variations</li>
+            <li><strong>Phonetic matching</strong> - Finds names that sound similar (Mohammad/Mohammed)</li>
+            <li><strong>Token matching</strong> - Handles name order differences</li>
+        </ul>
+        <p>The match score indicates the confidence level of the match. Higher scores indicate stronger matches.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
