@@ -10,16 +10,16 @@
 <body>
     <nav class="navbar">
         <div class="container">
-            <a href="/" class="logo">
+            <a href="/ui/" class="logo">
                 <span class="logo-icon">🛡️</span>
                 <span class="logo-text">TrustCheck</span>
             </a>
             <ul class="nav-links">
-                <li><a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a></li>
-                <li><a href="/screening" class="{% if '/screening' in request.url.path %}active{% endif %}">Screening</a></li>
-                <li><a href="/entities" class="{% if '/entities' in request.url.path %}active{% endif %}">Entities</a></li>
-                <li><a href="/changes" class="{% if '/changes' in request.url.path %}active{% endif %}">Changes</a></li>
-                <li><a href="/admin" class="{% if '/admin' in request.url.path %}active{% endif %}">Admin</a></li>
+                <li><a href="/ui/" class="{% if request.url.path == '/ui/' %}active{% endif %}">Dashboard</a></li>
+                <li><a href="/ui/screening" class="{% if '/screening' in request.url.path %}active{% endif %}">Screening</a></li>
+                <li><a href="/ui/entities" class="{% if '/entities' in request.url.path %}active{% endif %}">Entities</a></li>
+                <li><a href="/ui/changes" class="{% if '/changes' in request.url.path %}active{% endif %}">Changes</a></li>
+                <li><a href="/ui/admin" class="{% if '/admin' in request.url.path %}active{% endif %}">Admin</a></li>
                 <li><a href="/docs" target="_blank">API Docs</a></li>
             </ul>
         </div>
