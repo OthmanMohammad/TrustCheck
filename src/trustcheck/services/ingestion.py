@@ -40,6 +40,7 @@ from trustcheck.domain import (
     SourceRecord,
 )
 from trustcheck.matching import normalize_name
+from trustcheck.progress import progress_tracker
 from trustcheck.scrapers import ScrapeResult, get_scraper
 from trustcheck.scrapers.base import RawEntity
 
@@ -49,12 +50,13 @@ logger = logging.getLogger(__name__)
 class IngestionService:
     """Service for ingesting sanctions data from various sources."""
 
-    async def ingest_source(self, source: DataSource) -> ScraperRun:
+    async def ingest_source(self, source: DataSource, task_id: str | None = None) -> ScraperRun:
         """
         Ingest data from a single source.
 
         Args:
             source: The data source to ingest from
+            task_id: Optional task ID for progress tracking
 
         Returns:
             ScraperRun with results
@@ -69,6 +71,12 @@ class IngestionService:
             await run_repo.create(run)
 
         try:
+            # Update progress: downloading
+            if task_id:
+                await progress_tracker.update_progress(
+                    task_id, progress=0.05, message=f"Downloading {source.value} data..."
+                )
+
             # Get and execute scraper
             scraper = get_scraper(source)
             result = await scraper.scrape()
@@ -85,8 +93,17 @@ class IngestionService:
                 logger.error(f"Scraping failed for {source.value}: {result.error_message}")
                 return run
 
-            # Process results
-            run = await self._process_results(run, result)
+            # Update progress: processing
+            if task_id:
+                await progress_tracker.update_progress(
+                    task_id,
+                    progress=0.15,
+                    message=f"Processing {len(result.entities)} entities...",
+                    details={"total_entities": len(result.entities)}
+                )
+
+            # Process results with progress tracking
+            run = await self._process_results(run, result, task_id)
 
             logger.info(
                 f"Ingestion complete for {source.value}: "
@@ -131,10 +148,13 @@ class IngestionService:
 
         return results
 
-    async def _process_results(self, run: ScraperRun, result: ScrapeResult) -> ScraperRun:
+    async def _process_results(
+        self, run: ScraperRun, result: ScrapeResult, task_id: str | None = None
+    ) -> ScraperRun:
         """Process scrape results and update database."""
         run.content_hash = result.content_hash
         run.entities_processed = len(result.entities)
+        total_entities = len(result.entities)
 
         async with get_session_context() as session:
             entity_repo = EntityRepository(session)
@@ -146,7 +166,10 @@ class IngestionService:
             # Track seen UIDs for deactivation
             seen_uids: set[str] = set()
 
-            for raw_entity in result.entities:
+            # Progress tracking
+            progress_interval = max(1, total_entities // 20)  # Update every 5%
+
+            for idx, raw_entity in enumerate(result.entities):
                 seen_uids.add(raw_entity.source_uid)
 
                 try:
@@ -168,6 +191,21 @@ class IngestionService:
                 except Exception as e:
                     logger.warning(f"Error processing entity {raw_entity.source_uid}: {e}")
                     continue
+
+                # Update progress periodically
+                if task_id and (idx + 1) % progress_interval == 0:
+                    progress = 0.15 + (0.80 * (idx + 1) / total_entities)
+                    await progress_tracker.update_progress(
+                        task_id,
+                        progress=progress,
+                        message=f"Processing entities ({idx + 1}/{total_entities})...",
+                        details={
+                            "processed": idx + 1,
+                            "total": total_entities,
+                            "added": run.entities_added,
+                            "modified": run.entities_modified,
+                        }
+                    )
 
             # Deactivate entities not seen in this scrape
             removed_ids = await source_repo.deactivate_missing(run.source, seen_uids)
@@ -199,6 +237,20 @@ class IngestionService:
             run.status = ScraperStatus.SUCCESS
             run.completed_at = datetime.utcnow()
             await run_repo.update(run)
+
+            # Final progress update
+            if task_id:
+                await progress_tracker.update_progress(
+                    task_id,
+                    progress=0.95,
+                    message="Finalizing...",
+                    details={
+                        "processed": total_entities,
+                        "added": run.entities_added,
+                        "modified": run.entities_modified,
+                        "removed": run.entities_removed,
+                    }
+                )
 
         return run
 
