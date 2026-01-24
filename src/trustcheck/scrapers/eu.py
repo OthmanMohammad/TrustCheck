@@ -15,6 +15,12 @@ from trustcheck.scrapers.base import BaseScraper, RawEntity
 
 logger = logging.getLogger(__name__)
 
+# Alternative EU endpoints (some may work better than others)
+EU_URLS = [
+    "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content",
+    "https://data.europa.eu/api/hub/store/data/eu-consolidated-financial-sanctions-list.xml",
+]
+
 
 class EUScraper(BaseScraper):
     """Scraper for EU Financial Sanctions Consolidated List."""
@@ -26,6 +32,18 @@ class EUScraper(BaseScraper):
     @property
     def url(self) -> str:
         return settings.eu_sanctions_url
+
+    def _get_headers(self) -> dict[str, str]:
+        """Get EU-specific HTTP headers."""
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/xml, text/xml, */*;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Referer": "https://webgate.ec.europa.eu/fsd/fsf/",
+            "Origin": "https://webgate.ec.europa.eu",
+        }
 
     async def _parse(self, content: bytes) -> list[RawEntity]:
         """Parse EU sanctions list XML content."""
