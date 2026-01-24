@@ -4,36 +4,52 @@ TrustCheck API Integration Tests.
 Tests for the FastAPI endpoints.
 """
 
+import os
+import pathlib
+
+# Clean up any existing test database first
+_test_db_file = pathlib.Path("test_trustcheck.db")
+if _test_db_file.exists():
+    _test_db_file.unlink()
+
+# Set test database URL BEFORE any imports
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///test_trustcheck.db"
+os.environ["ENVIRONMENT"] = "development"
+os.environ["DEBUG"] = "true"
+
+# Clear settings cache before importing trustcheck
+import sys
+# Remove any cached trustcheck modules to force reimport with new env vars
+modules_to_remove = [k for k in sys.modules.keys() if k.startswith("trustcheck")]
+for mod in modules_to_remove:
+    del sys.modules[mod]
+
 import pytest
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
-
-# Test database URL
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest.fixture
 async def test_app():
     """Create a test application with clean database."""
-    import os
-    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
-    os.environ["ENVIRONMENT"] = "testing"
-    os.environ["DEBUG"] = "true"
-
+    from trustcheck.config import get_settings, settings
     from trustcheck.database.models import Base
-    from trustcheck.database.connection import get_engine, _engine
+    import trustcheck.database.connection as db_conn
 
-    # Create engine for test database
-    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+    # Reset the global engine if it exists
+    if db_conn._engine is not None:
+        await db_conn._engine.dispose()
+        db_conn._engine = None
+    db_conn._session_factory = None
+
+    # Create fresh engine
+    engine = db_conn.get_engine()
 
     # Create tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Import app after setting environment
-    from trustcheck.api.app import FastAPI
-    from trustcheck.config import settings
+    # Import and configure app
+    from fastapi import FastAPI
     from trustcheck.api.routes import (
         health_router,
         entities_router,
@@ -57,10 +73,18 @@ async def test_app():
 
     yield app
 
-    # Cleanup
+    # Cleanup tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+    # Dispose engine
     await engine.dispose()
+    db_conn._engine = None
+    db_conn._session_factory = None
+
+    # Clean up test database file
+    if _test_db_file.exists():
+        _test_db_file.unlink()
 
 
 @pytest.fixture
@@ -156,9 +180,9 @@ class TestEntitiesEndpoints:
     @pytest.mark.asyncio
     async def test_search_entities(self, client: AsyncClient):
         """Test entity search endpoint."""
-        response = await client.post(
+        response = await client.get(
             "/api/entities/search",
-            json={"query": "John Smith", "limit": 10}
+            params={"query": "John Smith", "limit": 10}
         )
 
         assert response.status_code == 200
