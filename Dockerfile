@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY pyproject.toml .
+COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir build pip setuptools wheel && \
     pip install --no-cache-dir asyncpg && \
     pip wheel --no-cache-dir --wheel-dir /app/wheels -e .
