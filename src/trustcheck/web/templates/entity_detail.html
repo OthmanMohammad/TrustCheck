@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}{{ entity.primary_name }} - TrustCheck{% endblock %}
+
+{% block content %}
+<div class="entity-header">
+    <div>
+        <a href="/entities" style="color: var(--text-secondary); text-decoration: none; font-size: 0.875rem;">
+            ← Back to Entities
+        </a>
+        <h1 class="entity-title" style="margin-top: 0.5rem;">{{ entity.primary_name }}</h1>
+        <div style="margin-top: 0.5rem;">
+            {% if entity.entity_type.value == 'INDIVIDUAL' %}
+                <span class="badge badge-primary">👤 Individual</span>
+            {% elif entity.entity_type.value == 'ORGANIZATION' %}
+                <span class="badge badge-secondary">🏢 Organization</span>
+            {% elif entity.entity_type.value == 'VESSEL' %}
+                <span class="badge badge-secondary">🚢 Vessel</span>
+            {% elif entity.entity_type.value == 'AIRCRAFT' %}
+                <span class="badge badge-secondary">✈️ Aircraft</span>
+            {% else %}
+                <span class="badge badge-secondary">{{ entity.entity_type.value }}</span>
+            {% endif %}
+
+            {% if entity.is_active %}
+                <span class="badge badge-danger">🔴 Active Sanction</span>
+            {% else %}
+                <span class="badge badge-success">✅ Inactive</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Main Info -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Basic Information</h3>
+        </div>
+        <div class="card-body">
+            <div class="entity-section">
+                <h3>Primary Name</h3>
+                <p>{{ entity.primary_name }}</p>
+            </div>
+
+            {% if entity.names %}
+            <div class="entity-section">
+                <h3>All Names ({{ entity.names|length }})</h3>
+                <ul class="entity-list">
+                    {% for name in entity.names %}
+                    <li>
+                        <span class="badge badge-secondary" style="margin-right: 0.5rem;">{{ name.name_type.value }}</span>
+                        {{ name.value }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if entity.date_of_birth or entity.year_of_birth %}
+            <div class="entity-section">
+                <h3>Date of Birth</h3>
+                <p>{{ entity.date_of_birth or entity.year_of_birth }}</p>
+            </div>
+            {% endif %}
+
+            {% if entity.place_of_birth %}
+            <div class="entity-section">
+                <h3>Place of Birth</h3>
+                <p>{{ entity.place_of_birth }}</p>
+            </div>
+            {% endif %}
+
+            {% if entity.nationality %}
+            <div class="entity-section">
+                <h3>Nationality</h3>
+                <p>{{ entity.nationality }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Programs & Sources -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Sanctions Programs</h3>
+        </div>
+        <div class="card-body">
+            {% if entity.programs %}
+            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                {% for program in entity.programs %}
+                <span class="badge badge-danger">{{ program }}</span>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color: var(--text-muted);">No programs listed</p>
+            {% endif %}
+
+            {% if entity.remarks %}
+            <div class="entity-section" style="margin-top: 1.5rem;">
+                <h3>Remarks</h3>
+                <p style="font-size: 0.875rem; color: var(--text-secondary);">{{ entity.remarks }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Addresses -->
+{% if entity.addresses %}
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>Addresses ({{ entity.addresses|length }})</h3>
+    </div>
+    <div class="card-body">
+        <ul class="entity-list">
+            {% for addr in entity.addresses %}
+            <li>
+                {% if addr.full_address %}
+                    {{ addr.full_address }}
+                {% else %}
+                    {% if addr.street %}{{ addr.street }}, {% endif %}
+                    {% if addr.city %}{{ addr.city }}, {% endif %}
+                    {% if addr.country %}{{ addr.country }}{% endif %}
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endif %}
+
+<!-- Identifiers -->
+{% if entity.identifiers %}
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>Identification Documents ({{ entity.identifiers|length }})</h3>
+    </div>
+    <div class="card-body">
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Value</th>
+                    <th>Country</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for id in entity.identifiers %}
+                <tr>
+                    <td>{{ id.id_type.value }}</td>
+                    <td><code>{{ id.value }}</code></td>
+                    <td>{{ id.country or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Metadata -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>Record Information</h3>
+    </div>
+    <div class="card-body">
+        <table>
+            <tr>
+                <td style="font-weight: 500; width: 200px;">Entity ID</td>
+                <td><code>{{ entity.id }}</code></td>
+            </tr>
+            <tr>
+                <td style="font-weight: 500;">Normalized Name</td>
+                <td><code>{{ entity.primary_name_normalized }}</code></td>
+            </tr>
+            <tr>
+                <td style="font-weight: 500;">First Seen</td>
+                <td>{{ entity.created_at.strftime('%Y-%m-%d %H:%M UTC') if entity.created_at else '-' }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: 500;">Last Updated</td>
+                <td>{{ entity.updated_at.strftime('%Y-%m-%d %H:%M UTC') if entity.updated_at else '-' }}</td>
+            </tr>
+        </table>
+    </div>
+</div>
+{% endblock %}
