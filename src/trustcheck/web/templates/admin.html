@@ -2,6 +2,131 @@
 
 {% block title %}Admin - TrustCheck{% endblock %}
 
+{% block head %}
+<style>
+    .progress-container {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    .progress-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    .progress-title {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .progress-status {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        text-transform: uppercase;
+        font-weight: 600;
+    }
+    .progress-status.running {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+    .progress-status.success {
+        background: #dcfce7;
+        color: #15803d;
+    }
+    .progress-status.failed {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+    .progress-bar-wrapper {
+        background: var(--bg-secondary);
+        border-radius: 4px;
+        height: 24px;
+        overflow: hidden;
+        margin-bottom: 0.5rem;
+    }
+    .progress-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #3b82f6, #60a5fa);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 0.75rem;
+        font-weight: 600;
+        min-width: 40px;
+    }
+    .progress-message {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+    }
+    .progress-details {
+        display: flex;
+        gap: 1.5rem;
+        margin-top: 0.5rem;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+    .progress-detail-item {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    .progress-detail-value {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .no-tasks {
+        text-align: center;
+        padding: 2rem;
+        color: var(--text-secondary);
+    }
+    .btn.loading {
+        position: relative;
+        pointer-events: none;
+        opacity: 0.7;
+    }
+    .btn.loading::after {
+        content: '';
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        top: calc(50% - 8px);
+        right: 8px;
+        border: 2px solid transparent;
+        border-top-color: currentColor;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    .ws-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+    .ws-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #9ca3af;
+    }
+    .ws-status-dot.connected {
+        background: #22c55e;
+    }
+    .ws-status-dot.disconnected {
+        background: #ef4444;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <h1>Administration</h1>
@@ -30,6 +155,22 @@
     </div>
 </div>
 
+<!-- Live Progress -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h3>Live Progress</h3>
+        <span class="ws-status">
+            <span class="ws-status-dot" id="wsStatusDot"></span>
+            <span id="wsStatusText">Connecting...</span>
+        </span>
+    </div>
+    <div class="card-body" id="progressContainer">
+        <div class="no-tasks" id="noTasksMessage">
+            No active tasks. Trigger a scrape below to see progress.
+        </div>
+    </div>
+</div>
+
 <div class="grid-2">
     <!-- Manual Scraping -->
     <div class="card">
@@ -41,20 +182,20 @@
                 Trigger a manual scrape for a specific data source.
             </p>
             <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <button class="btn btn-secondary" data-scrape="OFAC_SDN">
+                <button class="btn btn-secondary" data-scrape="OFAC_SDN" id="btn-ofac">
                     Scrape OFAC SDN
                 </button>
-                <button class="btn btn-secondary" data-scrape="UN">
+                <button class="btn btn-secondary" data-scrape="UN" id="btn-un">
                     Scrape UN
                 </button>
-                <button class="btn btn-secondary" data-scrape="EU">
+                <button class="btn btn-secondary" data-scrape="EU" id="btn-eu">
                     Scrape EU
                 </button>
-                <button class="btn btn-secondary" data-scrape="UK">
+                <button class="btn btn-secondary" data-scrape="UK" id="btn-uk">
                     Scrape UK
                 </button>
                 <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid var(--border-color);">
-                <button class="btn btn-primary" data-scrape="ALL">
+                <button class="btn btn-primary" data-scrape="ALL" id="btn-all">
                     Scrape All Sources
                 </button>
             </div>
@@ -71,7 +212,7 @@
                 The screening cache stores name data for faster matching.
                 Clear it to force reloading from the database.
             </p>
-            <button class="btn btn-warning" data-clear-cache>
+            <button class="btn btn-warning" data-clear-cache id="btn-cache">
                 Clear Screening Cache
             </button>
         </div>
@@ -81,7 +222,7 @@
 <!-- Scraper Status -->
 <div class="card" style="margin-top: 1.5rem;">
     <div class="card-header">
-        <h3>Scraper Status</h3>
+        <h3>Scraper History</h3>
     </div>
     <div class="card-body">
         <table>
@@ -97,7 +238,7 @@
                     <th>Removed</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="scraperHistoryBody">
                 {% for source, run in latest_runs.items() %}
                 <tr>
                     <td><strong>{{ source }}</strong></td>
@@ -184,4 +325,226 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // WebSocket connection for live progress
+    let ws = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    const tasks = new Map();
+
+    function connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/progress`;
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log('WebSocket connected');
+            reconnectAttempts = 0;
+            updateWsStatus(true);
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket disconnected');
+            updateWsStatus(false);
+
+            // Attempt to reconnect
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                setTimeout(connectWebSocket, 2000 * reconnectAttempts);
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            // Ignore ping messages
+            if (data.type === 'ping') return;
+
+            handleProgressUpdate(data);
+        };
+    }
+
+    function updateWsStatus(connected) {
+        const dot = document.getElementById('wsStatusDot');
+        const text = document.getElementById('wsStatusText');
+
+        if (connected) {
+            dot.classList.add('connected');
+            dot.classList.remove('disconnected');
+            text.textContent = 'Connected';
+        } else {
+            dot.classList.remove('connected');
+            dot.classList.add('disconnected');
+            text.textContent = 'Disconnected';
+        }
+    }
+
+    function handleProgressUpdate(data) {
+        tasks.set(data.task_id, data);
+        renderTasks();
+
+        // If task is complete, remove button loading state
+        if (data.status === 'success' || data.status === 'failed') {
+            removeButtonLoading();
+
+            // Remove from tasks after a delay to show final state
+            setTimeout(() => {
+                tasks.delete(data.task_id);
+                renderTasks();
+            }, 5000);
+
+            // Reload page after successful scrape to update history
+            if (data.status === 'success') {
+                setTimeout(() => {
+                    window.location.reload();
+                }, 3000);
+            }
+        }
+    }
+
+    function renderTasks() {
+        const container = document.getElementById('progressContainer');
+        const noTasksMessage = document.getElementById('noTasksMessage');
+
+        if (tasks.size === 0) {
+            noTasksMessage.style.display = 'block';
+            // Remove any existing progress containers
+            container.querySelectorAll('.progress-container').forEach(el => el.remove());
+            return;
+        }
+
+        noTasksMessage.style.display = 'none';
+
+        tasks.forEach((task, taskId) => {
+            let taskEl = document.getElementById(`task-${taskId}`);
+
+            if (!taskEl) {
+                taskEl = createTaskElement(taskId, task);
+                container.appendChild(taskEl);
+            } else {
+                updateTaskElement(taskEl, task);
+            }
+        });
+    }
+
+    function createTaskElement(taskId, task) {
+        const el = document.createElement('div');
+        el.id = `task-${taskId}`;
+        el.className = 'progress-container';
+        updateTaskElement(el, task);
+        return el;
+    }
+
+    function updateTaskElement(el, task) {
+        const progressPercent = Math.round(task.progress * 100);
+        const statusClass = task.status === 'running' ? 'running' :
+                           task.status === 'success' ? 'success' :
+                           task.status === 'failed' ? 'failed' : '';
+
+        let detailsHtml = '';
+        if (task.details) {
+            const d = task.details;
+            if (d.processed !== undefined) {
+                detailsHtml += `<span class="progress-detail-item">Processed: <span class="progress-detail-value">${d.processed.toLocaleString()}</span></span>`;
+            }
+            if (d.total !== undefined) {
+                detailsHtml += `<span class="progress-detail-item">Total: <span class="progress-detail-value">${d.total.toLocaleString()}</span></span>`;
+            }
+            if (d.added !== undefined) {
+                detailsHtml += `<span class="progress-detail-item">Added: <span class="progress-detail-value">${d.added.toLocaleString()}</span></span>`;
+            }
+            if (d.modified !== undefined) {
+                detailsHtml += `<span class="progress-detail-item">Modified: <span class="progress-detail-value">${d.modified.toLocaleString()}</span></span>`;
+            }
+        }
+
+        el.innerHTML = `
+            <div class="progress-header">
+                <span class="progress-title">${escapeHtml(task.task_name)}</span>
+                <span class="progress-status ${statusClass}">${task.status}</span>
+            </div>
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar" style="width: ${Math.max(progressPercent, 5)}%">
+                    ${progressPercent}%
+                </div>
+            </div>
+            <div class="progress-message">${escapeHtml(task.message)}</div>
+            ${detailsHtml ? `<div class="progress-details">${detailsHtml}</div>` : ''}
+        `;
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function removeButtonLoading() {
+        document.querySelectorAll('.btn.loading').forEach(btn => {
+            btn.classList.remove('loading');
+        });
+    }
+
+    // Initialize WebSocket on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        connectWebSocket();
+
+        // Scrape buttons
+        document.querySelectorAll('[data-scrape]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const source = btn.dataset.scrape;
+                btn.classList.add('loading');
+
+                try {
+                    const url = source === 'ALL' ? '/api/admin/scrape/all' : '/api/admin/scrape';
+                    const body = source === 'ALL' ? {} : { source };
+
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Failed to trigger scrape');
+                    }
+
+                    const data = await response.json();
+                    console.log('Scrape triggered:', data);
+
+                } catch (error) {
+                    console.error('Error triggering scrape:', error);
+                    alert('Failed to trigger scrape: ' + error.message);
+                    btn.classList.remove('loading');
+                }
+            });
+        });
+
+        // Clear cache button
+        document.querySelector('[data-clear-cache]').addEventListener('click', async () => {
+            const btn = document.querySelector('[data-clear-cache]');
+            btn.classList.add('loading');
+
+            try {
+                const response = await fetch('/api/admin/cache/clear', { method: 'POST' });
+                if (!response.ok) throw new Error('Failed to clear cache');
+
+                alert('Cache cleared successfully!');
+            } catch (error) {
+                console.error('Error clearing cache:', error);
+                alert('Failed to clear cache: ' + error.message);
+            } finally {
+                btn.classList.remove('loading');
+            }
+        });
+    });
+</script>
 {% endblock %}
