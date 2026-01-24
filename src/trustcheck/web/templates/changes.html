@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Changes - TrustCheck{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Recent Changes</h1>
+    <p>Monitor changes to sanctions lists</p>
+</div>
+
+<!-- Filters -->
+<form method="get" class="filters">
+    <div class="form-group">
+        <label class="form-label">Time Period</label>
+        <select name="days" class="form-input form-select">
+            <option value="1" {% if days == 1 %}selected{% endif %}>Last 24 hours</option>
+            <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
+            <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+            <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
+        </select>
+    </div>
+    <div class="form-group" style="display: flex; align-items: flex-end;">
+        <button type="submit" class="btn btn-primary">Apply</button>
+    </div>
+</form>
+
+<!-- Changes List -->
+<div class="card">
+    <div class="card-header">
+        <h3>{{ "{:,}".format(total) }} changes in the last {{ days }} days</h3>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        {% if changes %}
+        {% for change in changes %}
+        <div class="change-item">
+            <div class="change-icon {% if change.change_type.value == 'ADDED' %}added{% elif change.change_type.value == 'MODIFIED' %}modified{% else %}removed{% endif %}">
+                {% if change.change_type.value == 'ADDED' %}
+                    ➕
+                {% elif change.change_type.value == 'MODIFIED' %}
+                    ✏️
+                {% else %}
+                    ➖
+                {% endif %}
+            </div>
+            <div class="change-content">
+                <div class="change-title">
+                    <a href="/entities/{{ change.entity_id }}" style="color: var(--text-primary); text-decoration: none;">
+                        {{ change.entity_name }}
+                    </a>
+                </div>
+                <div class="change-meta">
+                    <span class="badge {% if change.change_type.value == 'ADDED' %}badge-success{% elif change.change_type.value == 'MODIFIED' %}badge-warning{% else %}badge-danger{% endif %}">
+                        {{ change.change_type.value }}
+                    </span>
+                    <span class="badge badge-secondary">{{ change.source.value }}</span>
+                    <span style="margin-left: 0.5rem;">{{ change.detected_at.strftime('%Y-%m-%d %H:%M UTC') }}</span>
+                </div>
+                {% if change.field_changes %}
+                <div style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">
+                    Changed fields: {{ change.field_changes.keys()|list|join(', ') }}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <div class="pagination" style="padding: 1rem;">
+            {% if page > 1 %}
+                <a href="?days={{ days }}&page={{ page - 1 }}">← Previous</a>
+            {% else %}
+                <span class="disabled">← Previous</span>
+            {% endif %}
+
+            <span>Page {{ page }} of {{ total_pages }}</span>
+
+            {% if page < total_pages %}
+                <a href="?days={{ days }}&page={{ page + 1 }}">Next →</a>
+            {% else %}
+                <span class="disabled">Next →</span>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📊</div>
+            <p>No changes detected in the selected time period.</p>
+            <p>Changes are recorded when sanctions lists are updated.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
