@@ -2,14 +2,89 @@
 
 {% block title %}Entities - TrustCheck{% endblock %}
 
+{% block head %}
+<style>
+    .search-container {
+        position: relative;
+        margin-bottom: 1rem;
+    }
+    .search-input {
+        width: 100%;
+        padding: 0.75rem 1rem 0.75rem 2.5rem;
+        border: 2px solid var(--border-color);
+        border-radius: 8px;
+        font-size: 1rem;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .search-input:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    .search-icon {
+        position: absolute;
+        left: 0.75rem;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-secondary);
+        pointer-events: none;
+    }
+    .search-spinner {
+        position: absolute;
+        right: 0.75rem;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 20px;
+        height: 20px;
+        border: 2px solid var(--border-color);
+        border-top-color: var(--primary);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        display: none;
+    }
+    .search-spinner.active {
+        display: block;
+    }
+    .search-results-info {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.5rem;
+    }
+    @keyframes spin {
+        to { transform: translateY(-50%) rotate(360deg); }
+    }
+    .highlight {
+        background-color: #fef08a;
+        padding: 0 2px;
+        border-radius: 2px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <h1>Sanctioned Entities</h1>
     <p>Browse and search the sanctions database</p>
 </div>
 
+<!-- Live Search -->
+<div class="card" style="margin-bottom: 1rem;">
+    <div class="card-body">
+        <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text"
+                   id="liveSearch"
+                   class="search-input"
+                   placeholder="Type to search entities (min 2 characters)..."
+                   autocomplete="off">
+            <div class="search-spinner" id="searchSpinner"></div>
+        </div>
+        <div class="search-results-info" id="searchInfo" style="display: none;"></div>
+    </div>
+</div>
+
 <!-- Filters -->
-<form method="get" class="filters">
+<form method="get" class="filters" id="filterForm">
     <div class="form-group">
         <label class="form-label">Source</label>
         <select name="source" class="form-input form-select">
@@ -38,12 +113,13 @@
 <!-- Results -->
 <div class="card">
     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <h3>{{ "{:,}".format(total) }} entities found</h3>
+        <h3 id="resultsHeader">{{ "{:,}".format(total) }} entities found</h3>
     </div>
     <div class="card-body">
+        <div id="entitiesContainer">
         {% if entities %}
         <div class="table-container">
-            <table>
+            <table id="entitiesTable">
                 <thead>
                     <tr>
                         <th>Name</th>
@@ -53,7 +129,7 @@
                         <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="entitiesBody">
                     {% for entity in entities %}
                     <tr>
                         <td>
@@ -66,8 +142,6 @@
                                 <span class="badge badge-primary">👤 Individual</span>
                             {% elif entity.entity_type.value == 'ORGANIZATION' %}
                                 <span class="badge badge-secondary">🏢 Organization</span>
-                            {% elif entity.entity_type.value == 'VESSEL' %}
-                                <span class="badge badge-secondary">🚢 Vessel</span>
                             {% elif entity.entity_type.value == 'AIRCRAFT' %}
                                 <span class="badge badge-secondary">✈️ Aircraft</span>
                             {% else %}
@@ -100,7 +174,7 @@
 
         <!-- Pagination -->
         {% if total_pages > 1 %}
-        <div class="pagination">
+        <div class="pagination" id="paginationContainer">
             {% if page > 1 %}
                 <a href="?page={{ page - 1 }}{% if source %}&source={{ source }}{% endif %}{% if entity_type %}&entity_type={{ entity_type }}{% endif %}">← Previous</a>
             {% else %}
@@ -117,12 +191,175 @@
         </div>
         {% endif %}
         {% else %}
-        <div class="empty-state">
+        <div class="empty-state" id="emptyState">
             <div class="empty-state-icon">📋</div>
             <p>No entities found matching your filters.</p>
             <p>Try adjusting your search criteria or run a scrape to populate the database.</p>
         </div>
         {% endif %}
+        </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Debounce function
+    function debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), wait);
+        };
+    }
+
+    // Escape HTML for safe rendering
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Highlight search term in text
+    function highlightText(text, query) {
+        if (!query) return escapeHtml(text);
+        const escaped = escapeHtml(text);
+        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        return escaped.replace(regex, '<span class="highlight">$1</span>');
+    }
+
+    // Format entity type
+    function formatEntityType(type) {
+        const types = {
+            'INDIVIDUAL': '<span class="badge badge-primary">👤 Individual</span>',
+            'ORGANIZATION': '<span class="badge badge-secondary">🏢 Organization</span>',
+            'VESSEL': '<span class="badge badge-secondary">🚢 Vessel</span>',
+            'AIRCRAFT': '<span class="badge badge-secondary">✈️ Aircraft</span>'
+        };
+        return types[type] || `<span class="badge badge-secondary">${type}</span>`;
+    }
+
+    // Render search results
+    function renderResults(data, query) {
+        const container = document.getElementById('entitiesContainer');
+        const header = document.getElementById('resultsHeader');
+        const searchInfo = document.getElementById('searchInfo');
+
+        if (!data.data || data.data.length === 0) {
+            header.textContent = 'No results found';
+            searchInfo.textContent = `No entities match "${query}"`;
+            searchInfo.style.display = 'block';
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🔍</div>
+                    <p>No entities found matching "${escapeHtml(query)}"</p>
+                    <p>Try a different search term.</p>
+                </div>
+            `;
+            return;
+        }
+
+        header.textContent = `${data.data.length} results for "${query}"`;
+        searchInfo.textContent = `Showing ${data.data.length} matching entities`;
+        searchInfo.style.display = 'block';
+
+        let html = `
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Programs</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+
+        for (const entity of data.data) {
+            const programs = entity.programs || [];
+            const programsHtml = programs.slice(0, 3)
+                .map(p => `<span class="badge badge-warning">${escapeHtml(p)}</span>`)
+                .join('');
+            const extraPrograms = programs.length > 3
+                ? `<span class="badge badge-secondary">+${programs.length - 3}</span>`
+                : '';
+
+            html += `
+                <tr>
+                    <td>
+                        <a href="/ui/entities/${entity.id}" style="color: var(--primary); text-decoration: none; font-weight: 500;">
+                            ${highlightText(entity.primary_name, query)}
+                        </a>
+                    </td>
+                    <td>${formatEntityType(entity.entity_type)}</td>
+                    <td>${programsHtml}${extraPrograms}</td>
+                    <td>
+                        ${entity.is_active
+                            ? '<span class="badge badge-danger">Active</span>'
+                            : '<span class="badge badge-secondary">Inactive</span>'}
+                    </td>
+                    <td>
+                        <a href="/ui/entities/${entity.id}" class="btn btn-sm btn-secondary">View</a>
+                    </td>
+                </tr>
+            `;
+        }
+
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    }
+
+    // Live search handler
+    async function performSearch(query) {
+        const spinner = document.getElementById('searchSpinner');
+        const searchInfo = document.getElementById('searchInfo');
+
+        if (query.length < 2) {
+            searchInfo.style.display = 'none';
+            // Optionally reload original content
+            return;
+        }
+
+        spinner.classList.add('active');
+
+        try {
+            const response = await fetch(`/api/entities/search?query=${encodeURIComponent(query)}&limit=50`);
+            const data = await response.json();
+            renderResults(data, query);
+        } catch (error) {
+            console.error('Search error:', error);
+            searchInfo.textContent = 'Error performing search';
+            searchInfo.style.display = 'block';
+        } finally {
+            spinner.classList.remove('active');
+        }
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+        const searchInput = document.getElementById('liveSearch');
+        const debouncedSearch = debounce(performSearch, 300);
+
+        searchInput.addEventListener('input', (e) => {
+            const query = e.target.value.trim();
+            if (query.length >= 2) {
+                debouncedSearch(query);
+            } else if (query.length === 0) {
+                // Reload page to show original results
+                window.location.href = window.location.pathname + window.location.search;
+            }
+        });
+
+        // Clear search on Escape
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                window.location.href = window.location.pathname + window.location.search;
+            }
+        });
+    });
+</script>
 {% endblock %}
