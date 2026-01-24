@@ -29,12 +29,52 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
+def _normalize_database_url(url: str) -> str:
+    """
+    Normalize database URL for asyncpg compatibility.
+
+    Neon and other providers use 'sslmode' but asyncpg uses 'ssl'.
+    This converts the URL to work with asyncpg.
+    """
+    from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+    parsed = urlparse(url)
+
+    # Parse query parameters
+    params = parse_qs(parsed.query, keep_blank_values=True)
+
+    # Convert sslmode to ssl for asyncpg
+    if 'sslmode' in params:
+        sslmode = params.pop('sslmode')[0]
+        # asyncpg uses 'ssl' parameter: 'require', 'prefer', 'disable', etc.
+        # or True/False for simple cases
+        if sslmode in ('require', 'verify-ca', 'verify-full'):
+            params['ssl'] = ['require']
+        elif sslmode == 'prefer':
+            params['ssl'] = ['prefer']
+        elif sslmode == 'disable':
+            params['ssl'] = ['disable']
+
+    # Remove channel_binding (not supported by asyncpg directly)
+    params.pop('channel_binding', None)
+
+    # Rebuild query string
+    new_query = urlencode({k: v[0] for k, v in params.items()}) if params else ''
+
+    # Rebuild URL
+    new_parsed = parsed._replace(query=new_query)
+    return urlunparse(new_parsed)
+
+
 def _create_postgresql_engine() -> AsyncEngine:
     """Create PostgreSQL engine with proper connection pooling."""
+    # Normalize URL for asyncpg compatibility (handle sslmode -> ssl conversion)
+    normalized_url = _normalize_database_url(settings.database_url)
+
     # Note: Don't specify poolclass for async engines - SQLAlchemy handles it automatically
     # The pool_size and max_overflow parameters still work with the default async pool
     engine = create_async_engine(
-        settings.database_url,
+        normalized_url,
         echo=settings.db_echo,
         future=True,
         pool_size=settings.db_pool_size,
