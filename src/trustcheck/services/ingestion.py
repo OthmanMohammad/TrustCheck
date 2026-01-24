@@ -152,13 +152,21 @@ class IngestionService:
 
         seen_uids: set[str] = set()
 
+        # Pre-fetch all existing source UIDs for this source to handle restarts
+        existing_uids: set[str] = set()
+        async with get_session_context() as session:
+            source_repo = SourceRecordRepository(session)
+            existing_records = await source_repo.get_all_uids_for_source(run.source)
+            existing_uids = set(existing_records)
+        logger.info(f"Found {len(existing_uids)} existing records for {run.source.value}")
+
         # Process in batches
         for batch_start in range(0, total_entities, self.batch_size):
             batch_end = min(batch_start + self.batch_size, total_entities)
             batch = result.entities[batch_start:batch_end]
 
             # Process this batch in a single transaction
-            batch_stats = await self._process_batch(run, batch, seen_uids)
+            batch_stats = await self._process_batch(run, batch, seen_uids, existing_uids)
 
             run.entities_added += batch_stats["added"]
             run.entities_modified += batch_stats["modified"]
@@ -201,7 +209,7 @@ class IngestionService:
         return run
 
     async def _process_batch(
-        self, run: ScraperRun, batch: list[RawEntity], seen_uids: set[str]
+        self, run: ScraperRun, batch: list[RawEntity], seen_uids: set[str], existing_uids: set[str]
     ) -> dict[str, int]:
         """
         Process a batch of entities in a single transaction.
@@ -220,9 +228,23 @@ class IngestionService:
                 seen_uids.add(raw.source_uid)
 
                 try:
-                    change = await self._process_entity(
-                        raw, run, entity_repo, source_repo, change_repo, event_repo
-                    )
+                    # Check if this entity already exists using pre-fetched set
+                    is_existing = raw.source_uid in existing_uids
+
+                    if is_existing:
+                        # Fetch and update existing record
+                        existing_record = await source_repo.get_by_source_uid(run.source, raw.source_uid)
+                        if existing_record:
+                            change = await self._update_entity(
+                                raw, existing_record, run, entity_repo, source_repo, change_repo, event_repo
+                            )
+                        else:
+                            # Shouldn't happen, but handle gracefully
+                            change = await self._create_entity(raw, run, entity_repo, source_repo, change_repo, event_repo)
+                            existing_uids.add(raw.source_uid)  # Track new addition
+                    else:
+                        change = await self._create_entity(raw, run, entity_repo, source_repo, change_repo, event_repo)
+                        existing_uids.add(raw.source_uid)  # Track new addition
 
                     if change:
                         if change.change_type == ChangeType.ADDED:
@@ -232,7 +254,9 @@ class IngestionService:
 
                 except Exception as e:
                     logger.warning(f"Error processing entity {raw.source_uid}: {e}")
-                    # Continue with next entity - don't fail the whole batch
+                    # Rollback this session and continue - but we need a new session
+                    await session.rollback()
+                    # Skip this entity and continue
                     continue
 
         return stats

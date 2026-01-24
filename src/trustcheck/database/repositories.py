@@ -395,6 +395,14 @@ class SourceRecordRepository:
         models = result.scalars().all()
         return [self._to_domain(m) for m in models]
 
+    async def get_all_uids_for_source(self, source: DataSource) -> list[str]:
+        """Get all source UIDs for a source (for efficient duplicate checking)."""
+        stmt = select(SourceRecordModel.source_uid).where(
+            SourceRecordModel.source == source.value
+        )
+        result = await self.session.execute(stmt)
+        return [row[0] for row in result.fetchall()]
+
     async def create(self, record: SourceRecord) -> SourceRecord:
         """Create a new source record."""
         model = SourceRecordModel(
