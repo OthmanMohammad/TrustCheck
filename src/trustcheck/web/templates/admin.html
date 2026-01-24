@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - TrustCheck{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Administration</h1>
+    <p>System management and monitoring</p>
+</div>
+
+<!-- System Status -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Scheduler</div>
+        <div class="stat-value">
+            {% if scheduler_running %}
+            <span style="color: var(--success);">Running</span>
+            {% else %}
+            <span style="color: var(--danger);">Stopped</span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Version</div>
+        <div class="stat-value">{{ settings.app_version }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Environment</div>
+        <div class="stat-value">{{ settings.environment }}</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Manual Scraping -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Manual Scraping</h3>
+        </div>
+        <div class="card-body">
+            <p style="margin-bottom: 1rem; color: var(--text-secondary);">
+                Trigger a manual scrape for a specific data source.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <button class="btn btn-secondary" data-scrape="OFAC_SDN">
+                    Scrape OFAC SDN
+                </button>
+                <button class="btn btn-secondary" data-scrape="UN">
+                    Scrape UN
+                </button>
+                <button class="btn btn-secondary" data-scrape="EU">
+                    Scrape EU
+                </button>
+                <button class="btn btn-secondary" data-scrape="UK">
+                    Scrape UK
+                </button>
+                <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid var(--border-color);">
+                <button class="btn btn-primary" data-scrape="ALL">
+                    Scrape All Sources
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cache Management -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Cache Management</h3>
+        </div>
+        <div class="card-body">
+            <p style="margin-bottom: 1rem; color: var(--text-secondary);">
+                The screening cache stores name data for faster matching.
+                Clear it to force reloading from the database.
+            </p>
+            <button class="btn btn-warning" data-clear-cache>
+                Clear Screening Cache
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Scraper Status -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>Scraper Status</h3>
+    </div>
+    <div class="card-body">
+        <table>
+            <thead>
+                <tr>
+                    <th>Source</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                    <th>Processed</th>
+                    <th>Added</th>
+                    <th>Modified</th>
+                    <th>Removed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for source, run in latest_runs.items() %}
+                <tr>
+                    <td><strong>{{ source }}</strong></td>
+                    <td>
+                        {% if run.status.value == 'SUCCESS' %}
+                            <span class="badge badge-success">Success</span>
+                        {% elif run.status.value == 'RUNNING' %}
+                            <span class="badge badge-primary">Running</span>
+                        {% elif run.status.value == 'FAILED' %}
+                            <span class="badge badge-danger">Failed</span>
+                        {% else %}
+                            <span class="badge badge-secondary">{{ run.status.value }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ run.started_at.strftime('%Y-%m-%d %H:%M') if run.started_at else '-' }}</td>
+                    <td>{{ run.completed_at.strftime('%Y-%m-%d %H:%M') if run.completed_at else '-' }}</td>
+                    <td>{{ run.entities_processed }}</td>
+                    <td>{{ run.entities_added }}</td>
+                    <td>{{ run.entities_modified }}</td>
+                    <td>{{ run.entities_removed }}</td>
+                </tr>
+                {% if run.error_message %}
+                <tr>
+                    <td colspan="8" style="background: #fee2e2; color: #991b1b; font-size: 0.875rem;">
+                        Error: {{ run.error_message }}
+                    </td>
+                </tr>
+                {% endif %}
+                {% else %}
+                <tr>
+                    <td colspan="8" class="empty-state">No scraper runs recorded yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Scheduled Jobs -->
+{% if jobs %}
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>Scheduled Jobs</h3>
+    </div>
+    <div class="card-body">
+        <table>
+            <thead>
+                <tr>
+                    <th>Job</th>
+                    <th>Trigger</th>
+                    <th>Next Run</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                <tr>
+                    <td>{{ job.name }}</td>
+                    <td>{{ job.trigger }}</td>
+                    <td>{{ job.next_run if job.next_run else 'Not scheduled' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- API Links -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h3>API Documentation</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; gap: 1rem;">
+            <a href="/docs" target="_blank" class="btn btn-secondary">
+                📚 Swagger UI
+            </a>
+            <a href="/redoc" target="_blank" class="btn btn-secondary">
+                📖 ReDoc
+            </a>
+            <a href="/openapi.json" target="_blank" class="btn btn-secondary">
+                📄 OpenAPI JSON
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
