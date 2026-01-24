@@ -21,16 +21,40 @@ from trustcheck.api.schemas import (
 from trustcheck.config import settings
 from trustcheck.database import DashboardRepository, ScraperRunRepository, get_session_context
 from trustcheck.domain import DataSource
+from trustcheck.progress import progress_tracker, TaskStatus
 from trustcheck.scheduler import get_job_status, get_scheduler
 from trustcheck.services import get_ingestion_service
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 
-async def run_scraper(source: DataSource) -> None:
-    """Background task to run a scraper."""
-    service = get_ingestion_service()
-    await service.ingest_source(source)
+async def run_scraper_with_progress(source: DataSource, task_id: str) -> None:
+    """Background task to run a scraper with progress tracking."""
+    try:
+        await progress_tracker.start_task(task_id, f"Downloading {source.value} data...")
+        service = get_ingestion_service()
+        result = await service.ingest_source(source, task_id=task_id)
+
+        success = result.status.value == "SUCCESS"
+        message = (
+            f"Completed: {result.entities_processed} processed, "
+            f"{result.entities_added} added, {result.entities_modified} modified"
+            if success else f"Failed: {result.error_message}"
+        )
+
+        await progress_tracker.complete_task(
+            task_id,
+            success=success,
+            message=message,
+            details={
+                "entities_processed": result.entities_processed,
+                "entities_added": result.entities_added,
+                "entities_modified": result.entities_modified,
+                "entities_removed": result.entities_removed,
+            }
+        )
+    except Exception as e:
+        await progress_tracker.complete_task(task_id, success=False, message=str(e))
 
 
 @router.get("/status", response_model=SystemStatusResponse)
@@ -108,16 +132,19 @@ async def trigger_scraper(
             detail=f"Invalid source: {request.source}. Valid sources: OFAC_SDN, UN, EU, UK",
         )
 
-    # Generate job ID
-    job_id = str(uuid4())
+    # Create tracked task
+    task_id = await progress_tracker.create_task(
+        task_name=f"Scraping {source.value}",
+        total_steps=100,  # Will be updated during scraping
+    )
 
     # Add to background tasks
-    background_tasks.add_task(run_scraper, source)
+    background_tasks.add_task(run_scraper_with_progress, source, task_id)
 
     return ScraperTriggerResponse(
         success=True,
         message=f"Scrape triggered for {source.value}",
-        job_id=job_id,
+        job_id=task_id,
         source=source.value,
         status="STARTED",
     )
@@ -128,16 +155,21 @@ async def trigger_all_scrapers(background_tasks: BackgroundTasks) -> ScraperTrig
     """
     Trigger a manual scrape for all sources.
     """
-    job_id = str(uuid4())
+    task_ids = []
 
-    # Add tasks for all sources
+    # Create tracked tasks for all sources
     for source in [DataSource.OFAC_SDN, DataSource.UN, DataSource.EU, DataSource.UK]:
-        background_tasks.add_task(run_scraper, source)
+        task_id = await progress_tracker.create_task(
+            task_name=f"Scraping {source.value}",
+            total_steps=100,
+        )
+        task_ids.append(task_id)
+        background_tasks.add_task(run_scraper_with_progress, source, task_id)
 
     return ScraperTriggerResponse(
         success=True,
         message="Scrape triggered for all sources",
-        job_id=job_id,
+        job_id=",".join(task_ids),  # Return all task IDs
         source="ALL",
         status="STARTED",
     )
