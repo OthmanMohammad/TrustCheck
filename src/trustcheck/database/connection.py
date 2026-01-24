@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool
 
 from trustcheck.config import settings
 
@@ -31,6 +31,8 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 def _create_postgresql_engine() -> AsyncEngine:
     """Create PostgreSQL engine with proper connection pooling."""
+    # Note: Don't specify poolclass for async engines - SQLAlchemy handles it automatically
+    # The pool_size and max_overflow parameters still work with the default async pool
     engine = create_async_engine(
         settings.database_url,
         echo=settings.db_echo,
@@ -40,7 +42,6 @@ def _create_postgresql_engine() -> AsyncEngine:
         pool_timeout=settings.db_pool_timeout,
         pool_pre_ping=True,  # Verify connections before use
         pool_recycle=3600,  # Recycle connections after 1 hour
-        poolclass=QueuePool,
     )
     logger.info(
         f"PostgreSQL engine created with pool_size={settings.db_pool_size}, "
