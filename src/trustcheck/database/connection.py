@@ -47,7 +47,6 @@ def _normalize_database_url(url: str) -> str:
     if 'sslmode' in params:
         sslmode = params.pop('sslmode')[0]
         # asyncpg uses 'ssl' parameter: 'require', 'prefer', 'disable', etc.
-        # or True/False for simple cases
         if sslmode in ('require', 'verify-ca', 'verify-full'):
             params['ssl'] = ['require']
         elif sslmode == 'prefer':
@@ -71,8 +70,6 @@ def _create_postgresql_engine() -> AsyncEngine:
     # Normalize URL for asyncpg compatibility (handle sslmode -> ssl conversion)
     normalized_url = _normalize_database_url(settings.database_url)
 
-    # Note: Don't specify poolclass for async engines - SQLAlchemy handles it automatically
-    # The pool_size and max_overflow parameters still work with the default async pool
     engine = create_async_engine(
         normalized_url,
         echo=settings.db_echo,
@@ -80,8 +77,8 @@ def _create_postgresql_engine() -> AsyncEngine:
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_pool_max_overflow,
         pool_timeout=settings.db_pool_timeout,
-        pool_pre_ping=True,  # Verify connections before use
-        pool_recycle=3600,  # Recycle connections after 1 hour
+        pool_pre_ping=True,
+        pool_recycle=3600,
     )
     logger.info(
         f"PostgreSQL engine created with pool_size={settings.db_pool_size}, "
