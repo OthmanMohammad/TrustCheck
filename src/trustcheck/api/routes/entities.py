@@ -32,7 +32,7 @@ def entity_to_summary(entity: SanctionedEntity) -> EntitySummary:
         entity_type=entity.entity_type.value,
         is_active=entity.is_active,
         programs=entity.programs,
-        sources=[],  # Would need to load from source_records
+        sources=[s.value for s in entity.sources],
         updated_at=entity.updated_at,
     )
 

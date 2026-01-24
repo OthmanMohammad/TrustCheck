@@ -255,6 +255,7 @@ tr:hover {
 .badge-success { background: #d1fae5; color: #065f46; }
 .badge-warning { background: #fef3c7; color: #92400e; }
 .badge-danger { background: #fee2e2; color: #991b1b; }
+.badge-info { background: #cffafe; color: #0e7490; }
 .badge-secondary { background: var(--bg-tertiary); color: var(--text-secondary); }
 
 /* Buttons */

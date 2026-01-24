@@ -335,7 +335,13 @@ class EntityRepository:
         ]
 
         programs = []
+        sources = []
         for sr in model.source_records:
+            if sr.is_active:
+                try:
+                    sources.append(DataSource(sr.source))
+                except ValueError:
+                    pass
             if sr.programs:
                 try:
                     programs.extend(json.loads(sr.programs))
@@ -351,6 +357,7 @@ class EntityRepository:
             addresses=addresses,
             identifiers=identifiers,
             programs=list(set(programs)),
+            sources=list(set(sources)),
             date_of_birth=datetime.fromisoformat(model.date_of_birth).date() if model.date_of_birth else None,
             year_of_birth=model.year_of_birth,
             place_of_birth=model.place_of_birth,

@@ -124,6 +124,7 @@
                     <tr>
                         <th>Name</th>
                         <th>Type</th>
+                        <th>Sources</th>
                         <th>Programs</th>
                         <th>Status</th>
                         <th>Actions</th>
@@ -147,6 +148,11 @@
                             {% else %}
                                 <span class="badge badge-secondary">{{ entity.entity_type.value }}</span>
                             {% endif %}
+                        </td>
+                        <td>
+                            {% for source in entity.sources %}
+                                <span class="badge badge-info">{{ source.value }}</span>
+                            {% endfor %}
                         </td>
                         <td>
                             {% for program in entity.programs[:3] %}
@@ -270,6 +276,7 @@
                         <tr>
                             <th>Name</th>
                             <th>Type</th>
+                            <th>Sources</th>
                             <th>Programs</th>
                             <th>Status</th>
                             <th>Actions</th>
@@ -280,12 +287,16 @@
 
         for (const entity of data.data) {
             const programs = entity.programs || [];
+            const sources = entity.sources || [];
             const programsHtml = programs.slice(0, 3)
                 .map(p => `<span class="badge badge-warning">${escapeHtml(p)}</span>`)
                 .join('');
             const extraPrograms = programs.length > 3
                 ? `<span class="badge badge-secondary">+${programs.length - 3}</span>`
                 : '';
+            const sourcesHtml = sources
+                .map(s => `<span class="badge badge-info">${escapeHtml(s)}</span>`)
+                .join('');
 
             html += `
                 <tr>
@@ -295,6 +306,7 @@
                         </a>
                     </td>
                     <td>${formatEntityType(entity.entity_type)}</td>
+                    <td>${sourcesHtml}</td>
                     <td>${programsHtml}${extraPrograms}</td>
                     <td>
                         ${entity.is_active

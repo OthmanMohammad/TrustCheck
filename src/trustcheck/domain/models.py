@@ -70,6 +70,7 @@ class SanctionedEntity:
     addresses: list[Address] = field(default_factory=list)
     identifiers: list[Identifier] = field(default_factory=list)
     programs: list[str] = field(default_factory=list)
+    sources: list[DataSource] = field(default_factory=list)
     date_of_birth: date | None = None
     year_of_birth: int | None = None
     place_of_birth: str | None = None

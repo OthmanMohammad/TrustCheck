@@ -80,21 +80,37 @@
         </div>
     </div>
 
-    <!-- Programs & Sources -->
+    <!-- Sources & Programs -->
     <div class="card">
         <div class="card-header">
-            <h3>Sanctions Programs</h3>
+            <h3>Sources & Programs</h3>
         </div>
         <div class="card-body">
-            {% if entity.programs %}
-            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-                {% for program in entity.programs %}
-                <span class="badge badge-danger">{{ program }}</span>
-                {% endfor %}
+            <div class="entity-section">
+                <h3>Sanctions Lists</h3>
+                {% if entity.sources %}
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                    {% for source in entity.sources %}
+                    <span class="badge badge-info">{{ source.value }}</span>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="color: var(--text-muted);">No sources recorded</p>
+                {% endif %}
             </div>
-            {% else %}
-            <p style="color: var(--text-muted);">No programs listed</p>
-            {% endif %}
+
+            <div class="entity-section" style="margin-top: 1.5rem;">
+                <h3>Programs</h3>
+                {% if entity.programs %}
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                    {% for program in entity.programs %}
+                    <span class="badge badge-danger">{{ program }}</span>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="color: var(--text-muted);">No programs listed</p>
+                {% endif %}
+            </div>
 
             {% if entity.remarks %}
             <div class="entity-section" style="margin-top: 1.5rem;">
