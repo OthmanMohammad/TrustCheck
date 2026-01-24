@@ -112,3 +112,15 @@ migrations/versions/*.pyc
 secrets/
 *.pem
 *.key
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+tfplan
+*.backup
+
+# Celery
+celerybeat-schedule*
