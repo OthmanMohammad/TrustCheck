@@ -11,7 +11,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -97,6 +97,12 @@ def create_app() -> FastAPI:
     # Register web UI routes
     register_web_routes(app)
 
+    # Add root redirect to UI
+    @app.get("/", include_in_schema=False)
+    async def root_redirect() -> RedirectResponse:
+        """Redirect root to web UI dashboard."""
+        return RedirectResponse(url="/ui/")
+
     # Register exception handlers
     register_exception_handlers(app)
 
@@ -107,7 +113,7 @@ def register_web_routes(app: FastAPI) -> None:
     """Register web UI routes."""
     from trustcheck.web import router as web_router
 
-    app.include_router(web_router)
+    app.include_router(web_router, prefix="/ui")
 
 
 def register_exception_handlers(app: FastAPI) -> None:
