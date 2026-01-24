@@ -144,6 +144,7 @@ class ScreeningService:
             entity = SanctionedEntity(
                 id=candidate.entity_id,
                 primary_name=candidate.primary_name,
+                primary_name_normalized=normalize_name(candidate.primary_name),
                 entity_type=candidate.entity_type,
                 nationality=candidate.nationality,
                 date_of_birth=candidate.date_of_birth,

@@ -224,24 +224,21 @@ class IngestionService:
             change_repo = ChangeEventRepository(session)
             event_repo = EventRepository(session)
 
+            # Batch-fetch all existing source records for this batch (1 query instead of N)
+            batch_existing_uids = [raw.source_uid for raw in batch if raw.source_uid in existing_uids]
+            existing_records_map = await source_repo.get_batch_by_source_uids(run.source, batch_existing_uids)
+
             for raw in batch:
                 seen_uids.add(raw.source_uid)
 
                 try:
-                    # Check if this entity already exists using pre-fetched set
-                    is_existing = raw.source_uid in existing_uids
+                    # Check if this entity already exists using batch-fetched map
+                    existing_record = existing_records_map.get(raw.source_uid)
 
-                    if is_existing:
-                        # Fetch and update existing record
-                        existing_record = await source_repo.get_by_source_uid(run.source, raw.source_uid)
-                        if existing_record:
-                            change = await self._update_entity(
-                                raw, existing_record, run, entity_repo, source_repo, change_repo, event_repo
-                            )
-                        else:
-                            # Shouldn't happen, but handle gracefully
-                            change = await self._create_entity(raw, run, entity_repo, source_repo, change_repo, event_repo)
-                            existing_uids.add(raw.source_uid)  # Track new addition
+                    if existing_record:
+                        change = await self._update_entity(
+                            raw, existing_record, run, entity_repo, source_repo, change_repo, event_repo
+                        )
                     else:
                         change = await self._create_entity(raw, run, entity_repo, source_repo, change_repo, event_repo)
                         existing_uids.add(raw.source_uid)  # Track new addition
@@ -254,9 +251,8 @@ class IngestionService:
 
                 except Exception as e:
                     logger.warning(f"Error processing entity {raw.source_uid}: {e}")
-                    # Rollback this session and continue - but we need a new session
+                    # Rollback and continue
                     await session.rollback()
-                    # Skip this entity and continue
                     continue
 
         return stats

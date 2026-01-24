@@ -403,6 +403,20 @@ class SourceRecordRepository:
         result = await self.session.execute(stmt)
         return [row[0] for row in result.fetchall()]
 
+    async def get_batch_by_source_uids(
+        self, source: DataSource, source_uids: list[str]
+    ) -> dict[str, SourceRecord]:
+        """Get multiple source records by UIDs in one query. Returns dict keyed by source_uid."""
+        if not source_uids:
+            return {}
+        stmt = select(SourceRecordModel).where(
+            SourceRecordModel.source == source.value,
+            SourceRecordModel.source_uid.in_(source_uids),
+        )
+        result = await self.session.execute(stmt)
+        models = result.scalars().all()
+        return {m.source_uid: self._to_domain(m) for m in models}
+
     async def create(self, record: SourceRecord) -> SourceRecord:
         """Create a new source record."""
         model = SourceRecordModel(
