@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TrustCheck{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a href="/" class="logo">
+                <span class="logo-icon">🛡️</span>
+                <span class="logo-text">TrustCheck</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a></li>
+                <li><a href="/screening" class="{% if '/screening' in request.url.path %}active{% endif %}">Screening</a></li>
+                <li><a href="/entities" class="{% if '/entities' in request.url.path %}active{% endif %}">Entities</a></li>
+                <li><a href="/changes" class="{% if '/changes' in request.url.path %}active{% endif %}">Changes</a></li>
+                <li><a href="/admin" class="{% if '/admin' in request.url.path %}active{% endif %}">Admin</a></li>
+                <li><a href="/docs" target="_blank">API Docs</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <div class="container">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>TrustCheck v{{ settings.app_version }} | Sanctions Screening Platform</p>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
