@@ -99,9 +99,11 @@ class EntityRepository:
         offset: int = 0,
     ) -> tuple[list[SanctionedEntity], int]:
         """List entities with filtering and pagination."""
-        # Base query
+        # Base query with all relationships eagerly loaded
         stmt = select(EntityModel).options(
             selectinload(EntityModel.names),
+            selectinload(EntityModel.addresses),
+            selectinload(EntityModel.identifiers),
             selectinload(EntityModel.source_records),
         )
 
@@ -139,6 +141,8 @@ class EntityRepository:
             select(EntityModel)
             .options(
                 selectinload(EntityModel.names),
+                selectinload(EntityModel.addresses),
+                selectinload(EntityModel.identifiers),
                 selectinload(EntityModel.source_records),
             )
             .where(EntityModel.primary_name_normalized.like(normalized_query))
