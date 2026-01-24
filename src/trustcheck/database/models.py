@@ -120,7 +120,7 @@ class IdentifierModel(Base):
         String(36), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True
     )
     id_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    id_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    id_value: Mapped[str] = mapped_column(Text, nullable=False)  # Can be very long
     country: Mapped[str | None] = mapped_column(String(255))
     issue_date: Mapped[str | None] = mapped_column(String(20))
     expiry_date: Mapped[str | None] = mapped_column(String(20))
