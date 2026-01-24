@@ -239,3 +239,178 @@ class ScreeningResultModel(Base):
     processing_time_ms: Mapped[float] = mapped_column(Float, default=0.0)
 
     __table_args__ = (Index("idx_screening_time", "screened_at"),)
+
+
+class BatchJobModel(Base):
+    """Batch screening job database model."""
+
+    __tablename__ = "batch_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    total_records: Mapped[int] = mapped_column(Integer, default=0)
+    processed_records: Mapped[int] = mapped_column(Integer, default=0)
+    matched_records: Mapped[int] = mapped_column(Integer, default=0)
+    threshold: Mapped[float] = mapped_column(Float, default=0.80)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    result_file: Mapped[str | None] = mapped_column(String(500))
+
+    # Relationships
+    results: Mapped[list["BatchResultModel"]] = relationship(
+        "BatchResultModel", back_populates="batch_job", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_batch_status", "status"),
+        Index("idx_batch_created", "created_at"),
+    )
+
+
+class BatchResultModel(Base):
+    """Individual result from batch screening."""
+
+    __tablename__ = "batch_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    batch_job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("batch_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    input_dob: Mapped[str | None] = mapped_column(String(20))
+    input_country: Mapped[str | None] = mapped_column(String(10))
+    has_match: Mapped[bool] = mapped_column(Boolean, default=False)
+    best_match_score: Mapped[float | None] = mapped_column(Float)
+    best_match_entity_id: Mapped[str | None] = mapped_column(String(36))
+    best_match_name: Mapped[str | None] = mapped_column(String(500))
+    match_count: Mapped[int] = mapped_column(Integer, default=0)
+    all_matches: Mapped[str | None] = mapped_column(Text)  # JSON array
+
+    # Relationships
+    batch_job: Mapped["BatchJobModel"] = relationship("BatchJobModel", back_populates="results")
+
+    __table_args__ = (Index("idx_batch_result_job", "batch_job_id", "row_number"),)
+
+
+class WatchlistModel(Base):
+    """User watchlist for monitoring entities."""
+
+    __tablename__ = "watchlists"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(1000))
+    email_recipients: Mapped[str | None] = mapped_column(Text)  # JSON array of emails
+    threshold: Mapped[float] = mapped_column(Float, default=0.80)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    entries: Mapped[list["WatchlistEntryModel"]] = relationship(
+        "WatchlistEntryModel", back_populates="watchlist", cascade="all, delete-orphan"
+    )
+    alerts: Mapped[list["AlertModel"]] = relationship(
+        "AlertModel", back_populates="watchlist", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("idx_watchlist_active", "is_active"),)
+
+
+class WatchlistEntryModel(Base):
+    """Entry in a watchlist (name to monitor)."""
+
+    __tablename__ = "watchlist_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    watchlist_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("watchlists.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    name_normalized: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    date_of_birth: Mapped[str | None] = mapped_column(String(20))
+    country: Mapped[str | None] = mapped_column(String(10))
+    reference_id: Mapped[str | None] = mapped_column(String(255))  # External reference
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    # Relationships
+    watchlist: Mapped["WatchlistModel"] = relationship("WatchlistModel", back_populates="entries")
+
+    __table_args__ = (Index("idx_watchlist_entry_name", "watchlist_id", "name_normalized"),)
+
+
+class AlertModel(Base):
+    """Alert generated when watchlist entry matches new entity."""
+
+    __tablename__ = "alerts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    watchlist_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("watchlists.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    watchlist_entry_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    matched_entity_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    matched_entity_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    match_score: Mapped[float] = mapped_column(Float, nullable=False)
+    match_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(50), nullable=False)  # NEW_MATCH, ENTITY_ADDED, ENTITY_MODIFIED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")  # PENDING, NOTIFIED, DISMISSED
+    webhook_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), index=True)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    # Relationships
+    watchlist: Mapped["WatchlistModel"] = relationship("WatchlistModel", back_populates="alerts")
+
+    __table_args__ = (
+        Index("idx_alert_status", "status", "created_at"),
+        Index("idx_alert_watchlist", "watchlist_id", "created_at"),
+    )
+
+
+class AuditLogModel(Base):
+    """Audit log for compliance tracking."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    action: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    resource_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(36))
+    user_id: Mapped[str | None] = mapped_column(String(100))  # For future auth
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    request_data: Mapped[str | None] = mapped_column(Text)  # JSON
+    response_summary: Mapped[str | None] = mapped_column(Text)  # JSON summary
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("idx_audit_action_time", "action", "created_at"),
+        Index("idx_audit_resource", "resource_type", "resource_id"),
+    )
+
+
+class SearchPresetModel(Base):
+    """Saved search filter presets."""
+
+    __tablename__ = "search_presets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    filters: Mapped[str] = mapped_column(Text, nullable=False)  # JSON with filter config
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("idx_search_preset_name", "name"),)
