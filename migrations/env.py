@@ -1,14 +1,14 @@
 """
 Alembic Migration Environment.
 
-Configuration for running database migrations.
+Supports both PostgreSQL (async) and SQLite (sync) databases.
 """
 
 import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, engine_from_config
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -19,7 +19,11 @@ from trustcheck.database.models import Base
 config = context.config
 
 # Set the database URL from settings
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Convert aiosqlite to sqlite for sync migrations
+db_url = settings.database_url
+if "aiosqlite" in db_url:
+    db_url = db_url.replace("sqlite+aiosqlite", "sqlite")
+config.set_main_option("sqlalchemy.url", db_url)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
@@ -61,12 +65,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """
-    Run migrations in 'online' mode with async engine.
-
-    In this scenario we need to create an Engine and associate a
-    connection with the context.
-    """
+    """Run migrations for async PostgreSQL."""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -79,9 +78,30 @@ async def run_async_migrations() -> None:
     await connectable.dispose()
 
 
+def run_sync_migrations() -> None:
+    """Run migrations for sync SQLite."""
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
+
+    connectable.dispose()
+
+
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    """
+    Run migrations in 'online' mode.
+
+    Uses async engine for PostgreSQL, sync engine for SQLite.
+    """
+    if settings.is_postgresql:
+        asyncio.run(run_async_migrations())
+    else:
+        run_sync_migrations()
 
 
 if context.is_offline_mode():
