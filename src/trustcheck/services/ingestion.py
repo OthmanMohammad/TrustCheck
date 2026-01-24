@@ -1,18 +1,22 @@
 """
 TrustCheck Ingestion Service.
 
-Handles the complete data ingestion pipeline:
+Enterprise-grade data ingestion pipeline with batch processing:
 1. Scraping data from sources
-2. Detecting changes
-3. Persisting to database
-4. Recording audit events
+2. Batch database operations for performance
+3. Change detection and audit logging
 """
 
+import hashlib
 import json
 import logging
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import text
+
+from trustcheck.config import settings
 from trustcheck.database import (
     ChangeEventRepository,
     EntityRepository,
@@ -48,11 +52,21 @@ logger = logging.getLogger(__name__)
 
 
 class IngestionService:
-    """Service for ingesting sanctions data from various sources."""
+    """
+    Enterprise ingestion service with batch processing.
+
+    Uses batch database operations for efficient ingestion of
+    large sanctions lists (10k+ entities).
+    """
+
+    def __init__(self) -> None:
+        self.batch_size = settings.scraping_batch_size
 
     async def ingest_source(self, source: DataSource, task_id: str | None = None) -> ScraperRun:
         """
         Ingest data from a single source.
+
+        Uses batch processing for efficient database operations.
 
         Args:
             source: The data source to ingest from
@@ -82,15 +96,7 @@ class IngestionService:
             result = await scraper.scrape()
 
             if not result.success:
-                run.status = ScraperStatus.FAILED
-                run.error_message = result.error_message
-                run.completed_at = datetime.utcnow()
-
-                async with get_session_context() as session:
-                    run_repo = ScraperRunRepository(session)
-                    await run_repo.update(run)
-
-                logger.error(f"Scraping failed for {source.value}: {result.error_message}")
+                await self._fail_run(run, result.error_message)
                 return run
 
             # Update progress: processing
@@ -102,8 +108,8 @@ class IngestionService:
                     details={"total_entities": len(result.entities)}
                 )
 
-            # Process results with progress tracking
-            run = await self._process_results(run, result, task_id)
+            # Process in batches
+            run = await self._process_in_batches(run, result, task_id)
 
             logger.info(
                 f"Ingestion complete for {source.value}: "
@@ -115,103 +121,132 @@ class IngestionService:
 
         except Exception as e:
             logger.exception(f"Error during ingestion for {source.value}: {e}")
-            run.status = ScraperStatus.FAILED
-            run.error_message = str(e)
-            run.completed_at = datetime.utcnow()
-
-            async with get_session_context() as session:
-                run_repo = ScraperRunRepository(session)
-                await run_repo.update(run)
+            await self._fail_run(run, str(e))
 
         return run
 
-    async def ingest_all_sources(self) -> dict[DataSource, ScraperRun]:
-        """
-        Ingest data from all sources.
+    async def _fail_run(self, run: ScraperRun, error: str) -> None:
+        """Mark a scraper run as failed."""
+        run.status = ScraperStatus.FAILED
+        run.error_message = error
+        run.completed_at = datetime.utcnow()
 
-        Returns:
-            Dictionary of source to ScraperRun results
-        """
-        results = {}
+        async with get_session_context() as session:
+            run_repo = ScraperRunRepository(session)
+            await run_repo.update(run)
 
-        for source in [DataSource.OFAC_SDN, DataSource.UN, DataSource.EU, DataSource.UK]:
-            try:
-                run = await self.ingest_source(source)
-                results[source] = run
-            except Exception as e:
-                logger.error(f"Error ingesting {source.value}: {e}")
-                results[source] = ScraperRun(
-                    source=source,
-                    status=ScraperStatus.FAILED,
-                    error_message=str(e),
-                )
+        logger.error(f"Scraping failed for {run.source.value}: {error}")
 
-        return results
-
-    async def _process_results(
+    async def _process_in_batches(
         self, run: ScraperRun, result: ScrapeResult, task_id: str | None = None
     ) -> ScraperRun:
-        """Process scrape results and update database."""
+        """
+        Process scrape results in batches for better performance.
+
+        Each batch is processed in its own transaction to avoid
+        long-running locks and enable better concurrency.
+        """
         run.content_hash = result.content_hash
-        run.entities_processed = len(result.entities)
         total_entities = len(result.entities)
+        run.entities_processed = total_entities
+
+        seen_uids: set[str] = set()
+
+        # Process in batches
+        for batch_start in range(0, total_entities, self.batch_size):
+            batch_end = min(batch_start + self.batch_size, total_entities)
+            batch = result.entities[batch_start:batch_end]
+
+            # Process this batch in a single transaction
+            batch_stats = await self._process_batch(run, batch, seen_uids)
+
+            run.entities_added += batch_stats["added"]
+            run.entities_modified += batch_stats["modified"]
+
+            # Update progress
+            if task_id:
+                progress = 0.15 + (0.75 * batch_end / total_entities)
+                await progress_tracker.update_progress(
+                    task_id,
+                    progress=progress,
+                    message=f"Processing entities ({batch_end}/{total_entities})...",
+                    details={
+                        "processed": batch_end,
+                        "total": total_entities,
+                        "added": run.entities_added,
+                        "modified": run.entities_modified,
+                    }
+                )
+
+        # Deactivate entities not seen in this scrape (separate transaction)
+        run.entities_removed = await self._deactivate_missing(run, seen_uids)
+
+        # Mark run as successful
+        await self._complete_run(run)
+
+        # Final progress update
+        if task_id:
+            await progress_tracker.update_progress(
+                task_id,
+                progress=0.95,
+                message="Finalizing...",
+                details={
+                    "processed": total_entities,
+                    "added": run.entities_added,
+                    "modified": run.entities_modified,
+                    "removed": run.entities_removed,
+                }
+            )
+
+        return run
+
+    async def _process_batch(
+        self, run: ScraperRun, batch: list[RawEntity], seen_uids: set[str]
+    ) -> dict[str, int]:
+        """
+        Process a batch of entities in a single transaction.
+
+        Returns stats: {"added": N, "modified": M}
+        """
+        stats = {"added": 0, "modified": 0}
 
         async with get_session_context() as session:
             entity_repo = EntityRepository(session)
             source_repo = SourceRecordRepository(session)
             change_repo = ChangeEventRepository(session)
             event_repo = EventRepository(session)
-            run_repo = ScraperRunRepository(session)
 
-            # Track seen UIDs for deactivation
-            seen_uids: set[str] = set()
-
-            # Progress tracking
-            progress_interval = max(1, total_entities // 20)  # Update every 5%
-
-            for idx, raw_entity in enumerate(result.entities):
-                seen_uids.add(raw_entity.source_uid)
+            for raw in batch:
+                seen_uids.add(raw.source_uid)
 
                 try:
                     change = await self._process_entity(
-                        raw_entity,
-                        run,
-                        entity_repo,
-                        source_repo,
-                        change_repo,
-                        event_repo,
+                        raw, run, entity_repo, source_repo, change_repo, event_repo
                     )
 
                     if change:
                         if change.change_type == ChangeType.ADDED:
-                            run.entities_added += 1
+                            stats["added"] += 1
                         elif change.change_type == ChangeType.MODIFIED:
-                            run.entities_modified += 1
+                            stats["modified"] += 1
 
                 except Exception as e:
-                    logger.warning(f"Error processing entity {raw_entity.source_uid}: {e}")
+                    logger.warning(f"Error processing entity {raw.source_uid}: {e}")
+                    # Continue with next entity - don't fail the whole batch
                     continue
 
-                # Update progress periodically
-                if task_id and (idx + 1) % progress_interval == 0:
-                    progress = 0.15 + (0.80 * (idx + 1) / total_entities)
-                    await progress_tracker.update_progress(
-                        task_id,
-                        progress=progress,
-                        message=f"Processing entities ({idx + 1}/{total_entities})...",
-                        details={
-                            "processed": idx + 1,
-                            "total": total_entities,
-                            "added": run.entities_added,
-                            "modified": run.entities_modified,
-                        }
-                    )
+        return stats
 
-            # Deactivate entities not seen in this scrape
+    async def _deactivate_missing(self, run: ScraperRun, seen_uids: set[str]) -> int:
+        """Deactivate entities not seen in this scrape."""
+        async with get_session_context() as session:
+            source_repo = SourceRecordRepository(session)
+            entity_repo = EntityRepository(session)
+            change_repo = ChangeEventRepository(session)
+            event_repo = EventRepository(session)
+
             removed_ids = await source_repo.deactivate_missing(run.source, seen_uids)
-            run.entities_removed = len(removed_ids)
 
-            # Create removal change events
             for entity_id in removed_ids:
                 entity = await entity_repo.get_by_id(entity_id)
                 if entity:
@@ -233,26 +268,16 @@ class IngestionService:
                     )
                     await event_repo.create(event)
 
-            # Update run status
-            run.status = ScraperStatus.SUCCESS
-            run.completed_at = datetime.utcnow()
+            return len(removed_ids)
+
+    async def _complete_run(self, run: ScraperRun) -> None:
+        """Mark a scraper run as completed."""
+        run.status = ScraperStatus.SUCCESS
+        run.completed_at = datetime.utcnow()
+
+        async with get_session_context() as session:
+            run_repo = ScraperRunRepository(session)
             await run_repo.update(run)
-
-            # Final progress update
-            if task_id:
-                await progress_tracker.update_progress(
-                    task_id,
-                    progress=0.95,
-                    message="Finalizing...",
-                    details={
-                        "processed": total_entities,
-                        "added": run.entities_added,
-                        "modified": run.entities_modified,
-                        "removed": run.entities_removed,
-                    }
-                )
-
-        return run
 
     async def _process_entity(
         self,
@@ -264,16 +289,13 @@ class IngestionService:
         event_repo: EventRepository,
     ) -> ChangeEvent | None:
         """Process a single raw entity."""
-        # Check if we already have this source record
         existing_record = await source_repo.get_by_source_uid(run.source, raw.source_uid)
 
         if existing_record:
-            # Update existing
             return await self._update_entity(
                 raw, existing_record, run, entity_repo, source_repo, change_repo, event_repo
             )
         else:
-            # Create new
             return await self._create_entity(raw, run, entity_repo, source_repo, change_repo, event_repo)
 
     async def _create_entity(
@@ -286,13 +308,10 @@ class IngestionService:
         event_repo: EventRepository,
     ) -> ChangeEvent:
         """Create a new entity from raw data."""
-        # Build domain entity
         entity = self._raw_to_entity(raw)
 
-        # Create entity
         await entity_repo.create(entity)
 
-        # Create source record
         content_hash = self._hash_raw_entity(raw)
         source_record = SourceRecord(
             entity_id=entity.id,
@@ -304,7 +323,6 @@ class IngestionService:
         )
         await source_repo.create(source_record)
 
-        # Create change event
         change = ChangeEvent(
             entity_id=entity.id,
             entity_name=entity.primary_name,
@@ -319,7 +337,6 @@ class IngestionService:
         )
         await change_repo.create(change)
 
-        # Create audit event
         event = Event(
             event_type=EventType.ENTITY_ADDED,
             aggregate_id=entity.id,
@@ -346,37 +363,27 @@ class IngestionService:
         """Update an existing entity with new raw data."""
         content_hash = self._hash_raw_entity(raw)
 
-        # Check if content changed
         if content_hash == existing_record.content_hash:
-            # No changes, just update last seen
             await source_repo.update_last_seen(str(existing_record.id))
             return None
 
-        # Content changed - update
         old_entity = await entity_repo.get_by_id(str(existing_record.entity_id))
         if not old_entity:
             return None
 
-        # Build new entity from raw
         new_entity = self._raw_to_entity(raw)
         new_entity.id = old_entity.id
         new_entity.created_at = old_entity.created_at
 
-        # Detect field changes
         field_changes = self._detect_changes(old_entity, new_entity)
 
         if not field_changes:
-            # No meaningful changes
             await source_repo.update_last_seen(str(existing_record.id))
             return None
 
-        # Update entity
         await entity_repo.update(new_entity)
-
-        # Update source record
         await source_repo.update_hash(str(existing_record.id), content_hash, raw.raw_data)
 
-        # Create change event
         change = ChangeEvent(
             entity_id=new_entity.id,
             entity_name=new_entity.primary_name,
@@ -387,7 +394,6 @@ class IngestionService:
         )
         await change_repo.create(change)
 
-        # Create audit event
         event = Event(
             event_type=EventType.ENTITY_MODIFIED,
             aggregate_id=new_entity.id,
@@ -403,7 +409,6 @@ class IngestionService:
 
     def _raw_to_entity(self, raw: RawEntity) -> SanctionedEntity:
         """Convert raw entity to domain entity."""
-        # Build names
         names = []
         for name_data in raw.names:
             name_type = NameType.ALIAS
@@ -424,7 +429,6 @@ class IngestionService:
                 )
             )
 
-        # Build addresses
         addresses = []
         for addr_data in raw.addresses:
             addresses.append(
@@ -437,7 +441,6 @@ class IngestionService:
                 )
             )
 
-        # Build identifiers
         identifiers = []
         for id_data in raw.identifiers:
             id_type = IdentifierType.OTHER
@@ -468,9 +471,6 @@ class IngestionService:
 
     def _hash_raw_entity(self, raw: RawEntity) -> str:
         """Generate a hash of the raw entity for change detection."""
-        import hashlib
-
-        # Create a normalized representation for hashing
         data = {
             "source_uid": raw.source_uid,
             "name": raw.primary_name,
@@ -486,9 +486,9 @@ class IngestionService:
 
     def _detect_changes(
         self, old: SanctionedEntity, new: SanctionedEntity
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         """Detect field-level changes between old and new entity."""
-        changes = {}
+        changes: dict[str, dict[str, Any]] = {}
 
         if old.primary_name != new.primary_name:
             changes["primary_name"] = {"old": old.primary_name, "new": new.primary_name}
@@ -502,10 +502,7 @@ class IngestionService:
             added = new_names - old_names
             removed = old_names - new_names
             if added or removed:
-                changes["names"] = {
-                    "added": list(added),
-                    "removed": list(removed),
-                }
+                changes["names"] = {"added": list(added), "removed": list(removed)}
 
         old_programs = set(old.programs)
         new_programs = set(new.programs)
@@ -513,18 +510,30 @@ class IngestionService:
             added = new_programs - old_programs
             removed = old_programs - new_programs
             if added or removed:
-                changes["programs"] = {
-                    "added": list(added),
-                    "removed": list(removed),
-                }
+                changes["programs"] = {"added": list(added), "removed": list(removed)}
 
         if old.nationality != new.nationality:
-            changes["nationality"] = {
-                "old": old.nationality or "",
-                "new": new.nationality or "",
-            }
+            changes["nationality"] = {"old": old.nationality or "", "new": new.nationality or ""}
 
         return changes
+
+    async def ingest_all_sources(self) -> dict[DataSource, ScraperRun]:
+        """Ingest data from all sources sequentially."""
+        results = {}
+
+        for source in [DataSource.OFAC_SDN, DataSource.UN, DataSource.EU, DataSource.UK]:
+            try:
+                run = await self.ingest_source(source)
+                results[source] = run
+            except Exception as e:
+                logger.error(f"Error ingesting {source.value}: {e}")
+                results[source] = ScraperRun(
+                    source=source,
+                    status=ScraperStatus.FAILED,
+                    error_message=str(e),
+                )
+
+        return results
 
 
 # Global service instance
