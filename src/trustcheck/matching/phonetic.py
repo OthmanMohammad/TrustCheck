@@ -5,11 +5,32 @@ Implements phonetic algorithms for matching names that sound similar
 but may be spelled differently.
 """
 
+import re
 from functools import lru_cache
 
 import jellyfish
 
 from trustcheck.matching.normalizer import normalize_name, tokenize_name
+
+
+def _sanitize_for_phonetic(text: str) -> str:
+    """
+    Sanitize text for phonetic algorithms.
+
+    Removes non-alphabetical characters that can cause errors
+    in phonetic encoding functions like match_rating_codex.
+
+    Args:
+        text: The text to sanitize
+
+    Returns:
+        Sanitized text containing only alphabetical characters
+    """
+    if not text:
+        return ""
+    # Keep only alphabetical characters
+    sanitized = re.sub(r'[^a-zA-Z]', '', text)
+    return sanitized
 
 
 @lru_cache(maxsize=10000)
@@ -27,9 +48,10 @@ def soundex(text: str) -> str:
     Returns:
         Soundex code (4 characters)
     """
-    if not text:
+    sanitized = _sanitize_for_phonetic(text)
+    if not sanitized:
         return ""
-    return jellyfish.soundex(text)
+    return jellyfish.soundex(sanitized)
 
 
 @lru_cache(maxsize=10000)
@@ -46,9 +68,10 @@ def metaphone(text: str) -> str:
     Returns:
         Metaphone code
     """
-    if not text:
+    sanitized = _sanitize_for_phonetic(text)
+    if not sanitized:
         return ""
-    return jellyfish.metaphone(text)
+    return jellyfish.metaphone(sanitized)
 
 
 @lru_cache(maxsize=10000)
@@ -65,9 +88,10 @@ def nysiis(text: str) -> str:
     Returns:
         NYSIIS code
     """
-    if not text:
+    sanitized = _sanitize_for_phonetic(text)
+    if not sanitized:
         return ""
-    return jellyfish.nysiis(text)
+    return jellyfish.nysiis(sanitized)
 
 
 @lru_cache(maxsize=10000)
@@ -84,9 +108,10 @@ def match_rating_codex(text: str) -> str:
     Returns:
         MRA codex
     """
-    if not text:
+    sanitized = _sanitize_for_phonetic(text)
+    if not sanitized:
         return ""
-    return jellyfish.match_rating_codex(text)
+    return jellyfish.match_rating_codex(sanitized)
 
 
 def get_phonetic_codes(name: str) -> dict[str, list[str]]:
