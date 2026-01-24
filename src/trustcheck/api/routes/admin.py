@@ -65,7 +65,8 @@ async def get_system_status() -> SystemStatusResponse:
     from trustcheck.database import check_db_connection
 
     # Check database
-    db_connected = await check_db_connection()
+    db_status = await check_db_connection()
+    db_connected = db_status.get("connected", False)
 
     # Check scheduler
     scheduler = get_scheduler()
