@@ -77,29 +77,19 @@ class ProgressTracker:
         Args:
             task_name: Human-readable name for the task
             total_steps: Total number of steps (0 if unknown)
-            deduplicate: If True, cancel any existing task with the same name
+            deduplicate: If True, remove any existing task with the same name
 
         Returns:
             Task ID for tracking
         """
         async with self._lock:
-            # Check for existing task with same name and cancel it
+            # Check for existing task with same name and remove it
             if deduplicate and task_name in self._task_by_name:
                 existing_id = self._task_by_name[task_name]
                 if existing_id in self._tasks:
-                    existing = self._tasks[existing_id]
-                    # If existing task is still running, mark it as cancelled
-                    if existing.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
-                        existing.status = TaskStatus.CANCELLED
-                        existing.message = "Superseded by new task"
-                        existing.timestamp = datetime.utcnow()
-                        # Notify about cancellation
-                        for queue in self._listeners:
-                            try:
-                                queue.put_nowait(existing)
-                            except asyncio.QueueFull:
-                                pass
-                        logger.info(f"Cancelled duplicate task: {task_name} ({existing_id})")
+                    # Remove the old task completely (don't send cancelled notification)
+                    del self._tasks[existing_id]
+                    logger.info(f"Removed duplicate task: {task_name} ({existing_id})")
 
             task_id = str(uuid4())
             update = ProgressUpdate(
