@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = Field(default="TrustCheck", description="Application name")
-    app_version: str = Field(default="3.0.0", description="Application version")
+    app_version: str = Field(default="4.0.0", description="Application version")
     environment: Literal["development", "staging", "production"] = Field(
         default="development", description="Deployment environment"
     )
@@ -37,11 +37,17 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port")
 
-    # Database
+    # Database - PostgreSQL is the default for enterprise use
     database_url: str = Field(
-        default="sqlite+aiosqlite:///data/trustcheck.db",
-        description="Database connection URL",
+        default="postgresql+asyncpg://postgres:postgres@localhost:5432/trustcheck",
+        description="Database connection URL (PostgreSQL recommended)",
     )
+
+    # Database pool settings (PostgreSQL)
+    db_pool_size: int = Field(default=10, description="Connection pool size")
+    db_pool_max_overflow: int = Field(default=20, description="Max overflow connections")
+    db_pool_timeout: int = Field(default=30, description="Pool connection timeout")
+    db_echo: bool = Field(default=False, description="Echo SQL statements")
 
     # Scraping Configuration
     scraping_timeout: int = Field(
@@ -53,6 +59,9 @@ class Settings(BaseSettings):
     scraping_user_agent: str = Field(
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         description="User agent for HTTP requests",
+    )
+    scraping_batch_size: int = Field(
+        default=500, description="Batch size for database inserts during scraping"
     )
 
     # Scraping Intervals (in hours)
@@ -78,6 +87,10 @@ class Settings(BaseSettings):
     )
     batch_screening_limit: int = Field(
         default=10000, description="Maximum names in a batch screening request"
+    )
+    # Trigram similarity threshold for PostgreSQL pg_trgm
+    trigram_similarity_threshold: float = Field(
+        default=0.3, description="Minimum trigram similarity for candidate generation"
     )
 
     # Cache Configuration
@@ -118,11 +131,37 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def is_postgresql(self) -> bool:
+        """Check if using PostgreSQL database."""
+        return "postgresql" in self.database_url.lower()
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_sqlite(self) -> bool:
+        """Check if using SQLite database (not recommended for production)."""
+        return "sqlite" in self.database_url.lower()
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def data_dir(self) -> Path:
         """Get the data directory path."""
         path = Path("data")
         path.mkdir(exist_ok=True)
         return path
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """Validate and warn about database choice."""
+        if "sqlite" in v.lower():
+            import warnings
+            warnings.warn(
+                "SQLite is not recommended for production. "
+                "Use PostgreSQL for concurrent access and better performance.",
+                UserWarning,
+                stacklevel=2
+            )
+        return v
 
 
 @lru_cache
