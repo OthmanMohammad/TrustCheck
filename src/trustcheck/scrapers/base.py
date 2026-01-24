@@ -112,20 +112,30 @@ class BaseScraper(ABC):
         result.completed_at = datetime.utcnow()
         return result
 
+    def _get_headers(self) -> dict[str, str]:
+        """Get HTTP headers for the request."""
+        return {
+            "User-Agent": self.user_agent,
+            "Accept": "application/xml,application/json,text/xml,text/html,*/*;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+        }
+
     async def _download(self) -> bytes:
         """Download content from the URL with retries."""
         last_error = None
+        headers = self._get_headers()
 
         for attempt in range(self.max_retries):
             try:
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(self.timeout),
                     follow_redirects=True,
+                    http2=True,  # Enable HTTP/2 for better compatibility
                 ) as client:
-                    response = await client.get(
-                        self.url,
-                        headers={"User-Agent": self.user_agent},
-                    )
+                    response = await client.get(self.url, headers=headers)
                     response.raise_for_status()
                     return response.content
 
