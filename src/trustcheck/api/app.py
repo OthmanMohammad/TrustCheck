@@ -21,6 +21,7 @@ from trustcheck.api.routes import (
     entities_router,
     health_router,
     screening_router,
+    websocket_router,
 )
 from trustcheck.config import settings
 from trustcheck.database import close_db, init_db
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(screening_router)
     app.include_router(changes_router)
     app.include_router(admin_router)
+    app.include_router(websocket_router)
 
     # Mount static files
     if STATIC_DIR.exists():
