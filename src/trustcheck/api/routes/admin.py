@@ -22,7 +22,16 @@ from trustcheck.config import settings
 from trustcheck.database import DashboardRepository, ScraperRunRepository, get_session_context
 from trustcheck.domain import DataSource
 from trustcheck.progress import progress_tracker, TaskStatus
-from trustcheck.scheduler import get_job_status, get_scheduler
+from trustcheck.scheduler import (
+    get_job_history,
+    get_job_status,
+    get_scheduler,
+    get_scheduler_health,
+    pause_job,
+    reschedule_job,
+    resume_job,
+    trigger_job_now,
+)
 from trustcheck.services import get_ingestion_service
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -213,4 +222,110 @@ async def clear_cache() -> dict:
     return {
         "success": True,
         "message": "Screening cache cleared",
+    }
+
+
+@router.get("/jobs")
+async def list_jobs() -> dict:
+    """
+    List all scheduled jobs with their status.
+    """
+    jobs = get_job_status()
+    health = get_scheduler_health()
+
+    return {
+        "success": True,
+        "scheduler": health,
+        "jobs": jobs,
+    }
+
+
+@router.get("/jobs/history")
+async def get_jobs_history(job_id: str | None = None, limit: int = 20) -> dict:
+    """
+    Get job execution history.
+    """
+    history = get_job_history(job_id, limit)
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "executions": history,
+    }
+
+
+@router.post("/jobs/{job_id}/pause")
+async def pause_scheduled_job(job_id: str) -> dict:
+    """
+    Pause a scheduled job.
+    """
+    success = pause_job(job_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    return {
+        "success": True,
+        "message": f"Job {job_id} paused",
+    }
+
+
+@router.post("/jobs/{job_id}/resume")
+async def resume_scheduled_job(job_id: str) -> dict:
+    """
+    Resume a paused job.
+    """
+    success = resume_job(job_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    return {
+        "success": True,
+        "message": f"Job {job_id} resumed",
+    }
+
+
+@router.post("/jobs/{job_id}/trigger")
+async def trigger_scheduled_job(job_id: str) -> dict:
+    """
+    Trigger a job to run immediately.
+    """
+    success = trigger_job_now(job_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    return {
+        "success": True,
+        "message": f"Job {job_id} triggered",
+    }
+
+
+@router.post("/jobs/{job_id}/reschedule")
+async def reschedule_scheduled_job(
+    job_id: str,
+    hours: int | None = None,
+    cron: str | None = None,
+) -> dict:
+    """
+    Reschedule a job with a new interval.
+
+    - hours: New interval in hours (for interval-based jobs)
+    - cron: New cron expression "minute hour" (for cron-based jobs)
+    """
+    if hours is None and cron is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either 'hours' or 'cron' parameter",
+        )
+
+    success = reschedule_job(job_id, hours=hours, cron=cron)
+
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    return {
+        "success": True,
+        "message": f"Job {job_id} rescheduled",
     }
