@@ -1,0 +1,79 @@
+name: Scheduled Scrape
+
+# This workflow triggers scrapes on a schedule.
+# Useful for free-tier deployments (Render/Fly.io) that may sleep.
+#
+# To enable:
+# 1. Go to repository Settings > Secrets and variables > Actions
+# 2. Add secret: TRUSTCHECK_URL (e.g., https://your-app.onrender.com)
+
+on:
+  schedule:
+    # OFAC: Every 6 hours (more frequent updates)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Source to scrape (ofac_sdn, un, eu, uk, all)'
+        required: false
+        default: 'all'
+
+jobs:
+  scrape:
+    name: Trigger Scrape
+    runs-on: ubuntu-latest
+    if: ${{ vars.TRUSTCHECK_URL != '' || secrets.TRUSTCHECK_URL != '' }}
+
+    steps:
+      - name: Wake up application
+        run: |
+          URL="${{ secrets.TRUSTCHECK_URL }}${{ vars.TRUSTCHECK_URL }}"
+          echo "Pinging health endpoint to wake up application..."
+          curl -sf "${URL}/health" || echo "App may be starting up..."
+          sleep 10
+
+      - name: Trigger OFAC Scrape (scheduled)
+        if: github.event_name == 'schedule'
+        run: |
+          URL="${{ secrets.TRUSTCHECK_URL }}${{ vars.TRUSTCHECK_URL }}"
+          curl -sf -X POST "${URL}/api/admin/scrape" \
+            -H "Content-Type: application/json" \
+            -d '{"source": "ofac_sdn"}' || echo "Scrape trigger sent"
+
+      - name: Trigger Manual Scrape
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          URL="${{ secrets.TRUSTCHECK_URL }}${{ vars.TRUSTCHECK_URL }}"
+          SOURCE="${{ github.event.inputs.source }}"
+
+          if [ "$SOURCE" = "all" ]; then
+            curl -sf -X POST "${URL}/api/admin/scrape/all" || echo "Scrape all triggered"
+          else
+            curl -sf -X POST "${URL}/api/admin/scrape" \
+              -H "Content-Type: application/json" \
+              -d "{\"source\": \"$SOURCE\"}" || echo "Scrape triggered for $SOURCE"
+          fi
+
+  # Daily comprehensive scrape of all sources
+  daily-scrape:
+    name: Daily Full Scrape
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && (vars.TRUSTCHECK_URL != '' || secrets.TRUSTCHECK_URL != '')
+
+    steps:
+      - name: Check if daily run (1 AM UTC)
+        id: check
+        run: |
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "01" ]; then
+            echo "is_daily=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_daily=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger All Sources Scrape
+        if: steps.check.outputs.is_daily == 'true'
+        run: |
+          URL="${{ secrets.TRUSTCHECK_URL }}${{ vars.TRUSTCHECK_URL }}"
+          echo "Running daily full scrape..."
+          curl -sf -X POST "${URL}/api/admin/scrape/all" || echo "Daily scrape triggered"
