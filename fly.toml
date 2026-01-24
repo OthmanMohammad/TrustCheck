@@ -1,0 +1,62 @@
+# Fly.io Configuration for TrustCheck
+# https://fly.io/docs/reference/configuration/
+
+# Application name (change this to your unique app name)
+app = "trustcheck-sanctions"
+primary_region = "iad"  # US East (Washington, D.C.)
+
+# Build configuration
+[build]
+  dockerfile = "Dockerfile"
+
+# Environment variables
+[env]
+  ENVIRONMENT = "production"
+  LOG_LEVEL = "INFO"
+  PYTHONUNBUFFERED = "1"
+  DATABASE_URL = "sqlite+aiosqlite:///data/trustcheck.db"
+
+# HTTP service configuration
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  # Health check
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 100
+    soft_limit = 80
+
+# Machine configuration (free tier uses shared-cpu-1x)
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# Persistent storage for SQLite database
+[mounts]
+  source = "trustcheck_data"
+  destination = "/app/data"
+  initial_size = "1gb"
+
+# Health checks
+[[services.http_checks]]
+  interval = "30s"
+  timeout = "10s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+# Restart policy
+[restart]
+  policy = "always"
+  max_retries = 3
+
+# Metrics (optional, disabled for free tier)
+# [metrics]
+#   port = 9091
+#   path = "/metrics"
