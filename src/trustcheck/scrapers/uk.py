@@ -128,7 +128,8 @@ class UKScraper(BaseScraper):
         """Get text from a child element."""
         child = element.find(f".//{tag}")
         if child is None:
-            child = element.find(f".//{{{*}}}{tag}")
+            # Try with wildcard namespace
+            child = element.find(".//{*}" + tag)
         if child is not None and child.text:
             return self._clean_text(child.text)
         return None
