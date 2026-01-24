@@ -1,24 +1,24 @@
 """
 TrustCheck Database Connection.
 
-Async SQLAlchemy database connection management for SQLite.
-
-WARNING: SQLite has fundamental limitations for concurrent writes.
-For production with high concurrency, use PostgreSQL instead!
+Enterprise-grade async database connection management.
+Supports PostgreSQL (recommended) and SQLite (development only).
 """
 
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
 
 from trustcheck.config import settings
 
@@ -29,62 +29,67 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
+def _create_postgresql_engine() -> AsyncEngine:
+    """Create PostgreSQL engine with proper connection pooling."""
+    engine = create_async_engine(
+        settings.database_url,
+        echo=settings.db_echo,
+        future=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_pool_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_pre_ping=True,  # Verify connections before use
+        pool_recycle=3600,  # Recycle connections after 1 hour
+        poolclass=QueuePool,
+    )
+    logger.info(
+        f"PostgreSQL engine created with pool_size={settings.db_pool_size}, "
+        f"max_overflow={settings.db_pool_max_overflow}"
+    )
+    return engine
+
+
+def _create_sqlite_engine() -> AsyncEngine:
+    """Create SQLite engine (development only)."""
+    logger.warning(
+        "Using SQLite - NOT RECOMMENDED FOR PRODUCTION. "
+        "SQLite has single-writer limitation causing lock errors under load."
+    )
+    engine = create_async_engine(
+        settings.database_url,
+        echo=settings.db_echo,
+        future=True,
+        poolclass=NullPool,  # No pooling for SQLite
+        connect_args={
+            "check_same_thread": False,
+            "timeout": 60,
+        },
+    )
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA mmap_size=268435456")
+        cursor.close()
+
+    return engine
+
+
 def get_engine() -> AsyncEngine:
     """Get or create the database engine."""
     global _engine
     if _engine is None:
-        is_sqlite = "sqlite" in settings.database_url
-
-        if is_sqlite:
-            # SQLite: Use NullPool to avoid connection pooling issues
-            # Each operation gets a fresh connection, avoiding locks
-            _engine = create_async_engine(
-                settings.database_url,
-                echo=settings.debug,
-                future=True,
-                poolclass=NullPool,  # No pooling - fresh connection each time
-                connect_args={
-                    "check_same_thread": False,
-                    "timeout": 60,  # Wait up to 60 seconds for locks
-                },
-            )
-
-            @event.listens_for(_engine.sync_engine, "connect")
-            def set_sqlite_pragma(dbapi_connection, connection_record):  # type: ignore
-                cursor = dbapi_connection.cursor()
-                # Enable foreign keys
-                cursor.execute("PRAGMA foreign_keys=ON")
-                # WAL mode allows concurrent reads during writes
-                cursor.execute("PRAGMA journal_mode=WAL")
-                # Larger cache (64MB)
-                cursor.execute("PRAGMA cache_size=-64000")
-                # NORMAL sync is faster, still safe with WAL
-                cursor.execute("PRAGMA synchronous=NORMAL")
-                # 60 second busy timeout
-                cursor.execute("PRAGMA busy_timeout=60000")
-                # Temp tables in memory
-                cursor.execute("PRAGMA temp_store=MEMORY")
-                # Memory-mapped I/O (256MB)
-                cursor.execute("PRAGMA mmap_size=268435456")
-                cursor.close()
-
-            logger.warning(
-                "Using SQLite database. This has concurrency limitations. "
-                "For production, consider using PostgreSQL."
-            )
+        if settings.is_postgresql:
+            _engine = _create_postgresql_engine()
         else:
-            # PostgreSQL or other databases with proper connection pooling
-            _engine = create_async_engine(
-                settings.database_url,
-                echo=settings.debug,
-                future=True,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True,
-            )
-
-        logger.info(f"Database engine created: {settings.database_url}")
-
+            _engine = _create_sqlite_engine()
+        logger.info(f"Database engine created: {settings.database_url.split('@')[-1]}")
     return _engine
 
 
@@ -104,7 +109,7 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency for getting database sessions."""
+    """Dependency for getting database sessions (FastAPI)."""
     session_factory = get_session_factory()
     async with session_factory() as session:
         try:
@@ -133,13 +138,79 @@ async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Initialize the database (create tables if they don't exist)."""
+    """Initialize the database (create tables and extensions)."""
     from trustcheck.database.models import Base
 
     engine = get_engine()
+
     async with engine.begin() as conn:
+        # For PostgreSQL, enable required extensions
+        if settings.is_postgresql:
+            await _init_postgresql_extensions(conn)
+
+        # Create all tables
         await conn.run_sync(Base.metadata.create_all)
+
     logger.info("Database tables initialized")
+
+
+async def _init_postgresql_extensions(conn: AsyncConnection) -> None:
+    """Initialize PostgreSQL extensions for fuzzy search."""
+    try:
+        # pg_trgm for trigram similarity (fuzzy text search)
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        logger.info("PostgreSQL pg_trgm extension enabled")
+
+        # unaccent for diacritic-insensitive search
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+        logger.info("PostgreSQL unaccent extension enabled")
+
+    except Exception as e:
+        logger.warning(f"Could not create PostgreSQL extensions: {e}")
+
+
+async def create_search_indexes() -> None:
+    """Create optimized indexes for search operations."""
+    if not settings.is_postgresql:
+        logger.info("Skipping search indexes - only available for PostgreSQL")
+        return
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        try:
+            # GIN index for trigram similarity on normalized names
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_names_trgm
+                ON names USING gin (name_normalized gin_trgm_ops)
+            """))
+
+            # GIN index for trigram on primary name
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_entities_name_trgm
+                ON entities USING gin (primary_name_normalized gin_trgm_ops)
+            """))
+
+            # B-tree indexes for common filters
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_entities_active
+                ON entities (is_active) WHERE is_active = true
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_entities_type
+                ON entities (entity_type)
+            """))
+
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_source_records_source_active
+                ON source_records (source, is_active) WHERE is_active = true
+            """))
+
+            logger.info("PostgreSQL search indexes created")
+
+        except Exception as e:
+            logger.error(f"Error creating search indexes: {e}")
+            raise
 
 
 async def close_db() -> None:
@@ -152,13 +223,35 @@ async def close_db() -> None:
         logger.info("Database connections closed")
 
 
-async def check_db_connection() -> bool:
-    """Check if database connection is working."""
+async def check_db_connection() -> dict[str, Any]:
+    """
+    Check database connection health.
+
+    Returns:
+        Dict with connection status and details
+    """
+    result = {
+        "connected": False,
+        "database_type": "postgresql" if settings.is_postgresql else "sqlite",
+        "extensions": [],
+        "error": None,
+    }
+
     try:
         engine = get_engine()
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return True
+            result["connected"] = True
+
+            # Check PostgreSQL extensions
+            if settings.is_postgresql:
+                ext_result = await conn.execute(text(
+                    "SELECT extname FROM pg_extension WHERE extname IN ('pg_trgm', 'unaccent')"
+                ))
+                result["extensions"] = [row[0] for row in ext_result.fetchall()]
+
     except Exception as e:
+        result["error"] = str(e)
         logger.error(f"Database connection check failed: {e}")
-        return False
+
+    return result
