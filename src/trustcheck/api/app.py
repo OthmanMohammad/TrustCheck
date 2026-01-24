@@ -17,10 +17,15 @@ from fastapi.templating import Jinja2Templates
 
 from trustcheck.api.routes import (
     admin_router,
+    alerts_router,
+    audit_router,
+    batch_router,
     changes_router,
     entities_router,
     health_router,
     screening_router,
+    search_router,
+    watchlists_router,
     websocket_router,
 )
 from trustcheck.config import settings
@@ -91,6 +96,11 @@ def create_app() -> FastAPI:
     app.include_router(changes_router)
     app.include_router(admin_router)
     app.include_router(websocket_router)
+    app.include_router(batch_router)
+    app.include_router(watchlists_router)
+    app.include_router(alerts_router)
+    app.include_router(audit_router)
+    app.include_router(search_router)
 
     # Mount static files
     if STATIC_DIR.exists():
